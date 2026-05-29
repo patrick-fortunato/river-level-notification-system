@@ -129,7 +129,7 @@ class Pipeline:
                 )
                 continue
 
-            success = email_sender.send_email(subscriber.email, report)
+            success = email_sender.send_email(subscriber.email, report, state_code=effective_state)
             if success:
                 self._logger.record_send_success(subscriber.email)
             else:

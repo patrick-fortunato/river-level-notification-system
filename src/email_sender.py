@@ -10,7 +10,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from src.config import Config
+from src.config import Config, STATE_NAMES
 from src.logger import PipelineLogger
 from src.retry import retry_with_backoff
 
@@ -99,7 +99,7 @@ class EmailSender:
             if remaining > 0:
                 time.sleep(remaining)
 
-    def send_email(self, recipient: str, html_body: str) -> bool:
+    def send_email(self, recipient: str, html_body: str, state_code: str | None = None) -> bool:
         """Send an HTML email to the recipient with retry logic.
 
         Constructs a MIME message, applies rate limiting, and sends via
@@ -109,6 +109,9 @@ class EmailSender:
         Args:
             recipient: The recipient's email address.
             html_body: The HTML content of the email body.
+            state_code: Optional two-letter state code to use for the email
+                subject. If provided, resolves the full state name from
+                STATE_NAMES. Otherwise falls back to the global config state.
 
         Returns:
             True on successful send, False on permanent failure.
@@ -117,12 +120,18 @@ class EmailSender:
             self._logger.log("ERROR", "Gmail service not authenticated. Call authenticate() first.")
             return False
 
+        # Resolve state name: use provided state_code if given, else global config
+        if state_code is not None:
+            resolved_state_name = STATE_NAMES.get(state_code, state_code)
+        else:
+            resolved_state_name = self._config.state_name
+
         # Build the MIME message
         message = MIMEMultipart("alternative")
         message["To"] = recipient
         message["From"] = self._config.sender_email
         message["Subject"] = self._config.email_subject.format(
-            state_name=self._config.state_name
+            state_name=resolved_state_name
         )
         message.attach(MIMEText(html_body, "html"))
 

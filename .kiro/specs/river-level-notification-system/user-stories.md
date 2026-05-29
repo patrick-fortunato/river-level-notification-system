@@ -66,14 +66,15 @@ User stories derived from the requirements document, organized for agile sprint 
 ### Story 2.1: Read Subscriber Preferences from Google Sheet
 
 **As a** system operator,
-**I want** subscriber preferences managed in a Google Sheet,
-**So that** I can add/remove subscribers and change gauge preferences without touching code.
+**I want** subscriber preferences managed in a Google Sheet with a simple structure,
+**So that** I can add/remove subscribers and change gauge exclusions without touching code.
 
 **Acceptance Criteria:**
 - System authenticates with Google Sheets using a service account
-- System reads gauge numbers from row 2, columns D onward
-- System reads subscriber emails from column C, rows 3 onward
-- System reads TRUE/FALSE flags from columns D onward for each subscriber
+- System reads the header row (row 1) to confirm expected column layout
+- System reads subscriber emails from column A, rows 2 onward
+- System reads optional comma-separated exclusion lists from column B
+- Subscribers with empty exclusion lists receive ALL gauges
 - Rows with empty/blank email are skipped without error
 
 **Story Points:** 5
@@ -82,10 +83,10 @@ User stories derived from the requirements document, organized for agile sprint 
 
 | ID | Test Case | Steps | Expected Result |
 |----|-----------|-------|-----------------|
-| TC-2.1.1 | Read header row | Sheet has gauge numbers in D2, E2, F2 | System identifies 3 gauge numbers |
-| TC-2.1.2 | Read subscriber with all TRUE | Row 3 has email + all TRUE flags | Subscriber object has all gauge numbers in subscribed_gauges |
-| TC-2.1.3 | Read subscriber with mixed flags | Row has TRUE, FALSE, TRUE | Subscriber has only the 2 TRUE gauges |
-| TC-2.1.4 | Skip empty email row | Row 4 has blank in column C | Row is skipped, no error logged |
+| TC-2.1.1 | Read header row | Sheet has "Email" in A1, "Exclude Gauges" in B1 | System confirms expected structure |
+| TC-2.1.2 | Read subscriber with no exclusions | Row 2 has email, column B is blank | Subscriber object has empty excluded_gauges list (receives all) |
+| TC-2.1.3 | Read subscriber with exclusions | Row has email, B has "12484500, 12488500" | Subscriber has those 2 gauges in excluded_gauges |
+| TC-2.1.4 | Skip empty email row | Row 3 has blank in column A | Row is skipped, no error logged |
 | TC-2.1.5 | Multiple subscribers | 5 rows with valid emails | 5 Subscriber objects returned |
 | TC-2.1.6 | Service account auth | Provide valid service account JSON | Authentication succeeds, sheet is readable |
 | TC-2.1.7 | Invalid service account | Provide malformed JSON file | System reports authentication error |
@@ -97,14 +98,14 @@ User stories derived from the requirements document, organized for agile sprint 
 ### Story 3.1: Build Personalized HTML Email Reports
 
 **As a** subscriber,
-**I want** to receive an email containing only the river gauges I selected,
+**I want** to receive an email containing all river gauges in my state except those I've opted out of,
 **So that** I see relevant information without clutter.
 
 **Acceptance Criteria:**
-- Report includes only gauges marked TRUE for that subscriber
+- Report includes all gauges from the state EXCEPT those in the subscriber's exclusion list
 - Each gauge entry shows: clickable USGS link, gauge name, date/time, flow level
 - Report is formatted as HTML
-- Gauges not found in USGS data are silently omitted
+- Exclusion entries not matching any USGS gauge are silently ignored
 
 **Story Points:** 3
 
@@ -112,12 +113,12 @@ User stories derived from the requirements document, organized for agile sprint 
 
 | ID | Test Case | Steps | Expected Result |
 |----|-----------|-------|-----------------|
-| TC-3.1.1 | Only subscribed gauges included | Subscriber has 2 of 5 gauges TRUE | Report contains exactly 2 gauge entries |
-| TC-3.1.2 | HTML format | Build report for a subscriber | Output is valid HTML with proper tags |
-| TC-3.1.3 | Clickable USGS link | Check gauge entry in report | Contains `<a href="...">` with correct USGS URL |
-| TC-3.1.4 | All fields displayed | Check a gauge entry | Shows gauge name, date/time, and flow level |
-| TC-3.1.5 | Missing gauge silently omitted | Subscriber has gauge not in USGS data | Report omits that gauge, no error |
-| TC-3.1.6 | Multiple gauges rendered | Subscriber has 4 gauges with data | All 4 appear in report in sequence |
+| TC-3.1.1 | Subscriber with no exclusions | Subscriber has empty exclusion list, 5 gauges available | Report contains all 5 gauge entries |
+| TC-3.1.2 | Subscriber with exclusions | Subscriber excludes 2 of 5 gauges | Report contains exactly 3 gauge entries |
+| TC-3.1.3 | HTML format | Build report for a subscriber | Output is valid HTML with proper tags |
+| TC-3.1.4 | Clickable USGS link | Check gauge entry in report | Contains `<a href="...">` with correct USGS URL |
+| TC-3.1.5 | All fields displayed | Check a gauge entry | Shows gauge name, date/time, and flow level |
+| TC-3.1.6 | Invalid exclusion silently ignored | Subscriber excludes gauge "99999999" not in USGS data | No error, report includes all available gauges |
 | TC-3.1.7 | Version in email footer | Build any report | Footer contains current app version (e.g., "v0.1.0") |
 
 ---
@@ -125,11 +126,11 @@ User stories derived from the requirements document, organized for agile sprint 
 ### Story 3.2: Suppress Empty Email Reports
 
 **As a** subscriber,
-**I don't want** to receive an empty email when none of my gauges have data,
+**I don't want** to receive an empty email when all gauges are excluded or no data is available,
 **So that** my inbox isn't cluttered with useless messages.
 
 **Acceptance Criteria:**
-- No email is sent if all subscribed gauges have no data
+- No email is sent if all gauges are in the subscriber's exclusion list or no data is available
 - System logs that the subscriber was skipped with reason
 
 **Story Points:** 2
@@ -138,9 +139,10 @@ User stories derived from the requirements document, organized for agile sprint 
 
 | ID | Test Case | Steps | Expected Result |
 |----|-----------|-------|-----------------|
-| TC-3.2.1 | All gauges missing data | Subscriber has 3 gauges, none in USGS response | No email sent, log shows "skipped: no gauge data" |
-| TC-3.2.2 | Some gauges have data | Subscriber has 3 gauges, 1 has data | Email IS sent with the 1 gauge |
-| TC-3.2.3 | Skip reason logged | Trigger empty report suppression | Log entry includes subscriber email and skip reason |
+| TC-3.2.1 | All gauges excluded | Subscriber excludes all gauges returned by USGS | No email sent, log shows "skipped: all gauges excluded" |
+| TC-3.2.2 | No USGS data available | USGS returns empty data set | No email sent, log shows "skipped: no gauge data" |
+| TC-3.2.3 | Some gauges not excluded | Subscriber excludes 2 of 5 gauges | Email IS sent with the 3 remaining gauges |
+| TC-3.2.4 | Skip reason logged | Trigger empty report suppression | Log entry includes subscriber email and skip reason |
 
 ---
 
@@ -259,6 +261,7 @@ User stories derived from the requirements document, organized for agile sprint 
 - System executes pipeline daily at configurable time
 - Default time is 06:00 AM local time
 - Full pipeline triggered: fetch data → read subscribers → send emails
+- `--run-now` flag executes pipeline once immediately and exits without starting the scheduler
 
 **Story Points:** 2
 
@@ -270,6 +273,8 @@ User stories derived from the requirements document, organized for agile sprint 
 | TC-6.1.2 | Custom schedule time | Set schedule_time to "08:30" | Pipeline scheduled for 08:30 |
 | TC-6.1.3 | Pipeline triggered at time | Advance clock to scheduled time | Full pipeline executes (validate → fetch → read → send → summary) |
 | TC-6.1.4 | Runs daily | Let scheduler run past 2 scheduled times | Pipeline executes twice |
+| TC-6.1.5 | --run-now flag | Run `python river_notify.py --run-now` | Pipeline executes once immediately and process exits |
+| TC-6.1.6 | --run-now does not start scheduler | Run with --run-now, check for scheduler loop | No scheduler loop started, process exits after pipeline completes |
 
 ---
 
@@ -320,7 +325,7 @@ User stories derived from the requirements document, organized for agile sprint 
 | TC-7.2.2 | Missing service account file | Remove service_account.json | Error: "service account file not found", system exits |
 | TC-7.2.3 | Missing token file | Remove token.json | Error: "Gmail token file not found", system exits |
 | TC-7.2.4 | Sheet not accessible | Use invalid spreadsheet ID | Error: "Google Sheet not accessible", system exits |
-| TC-7.2.5 | Sheet missing header row | Sheet has no gauge numbers in row 2 | Error: "no gauge numbers found in header row", system exits |
+| TC-7.2.5 | Sheet missing header labels | Sheet has wrong or missing column labels in row 1 | Error: "unexpected sheet structure", system exits |
 | TC-7.2.6 | No pipeline work on failure | Fail validation, check logs | No USGS requests made, no emails sent |
 
 ---
@@ -385,9 +390,9 @@ User stories derived from the requirements document, organized for agile sprint 
 **So that** the system can read subscriber preferences correctly.
 
 **Acceptance Criteria:**
-- Sheet has gauge numbers in row 2 starting from column D
-- Sheet has subscriber emails in column C, rows 3+
-- Sheet has TRUE/FALSE flags in columns D+ for each subscriber
+- Sheet has header row (row 1) with "Email" in column A and "Exclude Gauges" in column B
+- Sheet has subscriber emails in column A, rows 2+
+- Sheet has optional comma-separated gauge exclusion lists in column B
 - Sheet is shared with the service account email
 
 **Story Points:** 1 (manual setup)
@@ -396,7 +401,7 @@ User stories derived from the requirements document, organized for agile sprint 
 
 | ID | Test Case | Steps | Expected Result |
 |----|-----------|-------|-----------------|
-| TC-9.2.1 | Correct sheet structure | Create sheet per spec, run system | System reads all subscribers and gauge numbers correctly |
+| TC-9.2.1 | Correct sheet structure | Create sheet per spec, run system | System reads all subscribers and exclusion lists correctly |
 | TC-9.2.2 | Sheet shared with service account | Share sheet, run system | No authentication errors |
 | TC-9.2.3 | Unshared sheet | Don't share sheet, run system | Validation fails with "sheet not accessible" error |
 

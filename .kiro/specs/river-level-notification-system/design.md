@@ -2,10 +2,10 @@
 
 ## Overview
 
-The River Level Notification System is a Python application that retrieves real-time river gauge data from the USGS Water Services REST API for a configured US state, reads subscriber preferences from a Google Sheet, and sends personalized HTML email reports via the Gmail API. It replaces the existing Selenium-based screen scraping approach with a structured JSON API integration, improving reliability and eliminating browser dependencies.
+The River Level Notification System is a Python application that retrieves real-time river gauge data from the USGS Water Services REST API for ALL gauges in a configured US state, reads subscriber emails and optional gauge exclusion preferences from a Google Sheet, and sends personalized HTML email reports via the Gmail API. Subscribers receive all gauges by default and can opt out of specific gauges via a comma-separated exclusion list in the sheet. It replaces the existing Selenium-based screen scraping approach with a structured JSON API integration, improving reliability and eliminating browser dependencies.
 
 The system consists of two executables:
-1. **Main Pipeline** (`river_notify.py`) — the daily notification workflow
+1. **Main Pipeline** (`river_notify.py`) — the daily notification workflow (supports `--run-now` for immediate one-shot execution, `--version` to print version)
 2. **Token Generator** (`create_token.py`) — a one-time OAuth2 setup utility
 
 The pipeline runs on a configurable daily schedule and includes automatic token refresh, retry with exponential backoff, empty report suppression, structured logging, startup validation, and email rate limiting.
@@ -17,7 +17,8 @@ The pipeline runs on a configurable daily schedule and includes automatic token 
 | Data source | USGS Instantaneous Values REST API (JSON) | Eliminates Selenium dependency, faster, more reliable than scraping |
 | Subscriber storage | Google Sheets (service account) | Non-technical users can manage subscriptions without code changes |
 | Email delivery | Gmail API (OAuth2) | Reliable delivery, avoids SMTP configuration issues |
-| State selection | Configurable state code (default OR) | Supports any US state without code changes |
+| State selection | Configurable state code (default OR) | Supports any US state without code changes; fetches ALL gauges for the state |
+| Gauge selection | All gauges by default, opt-out via exclusion list | Simplifies subscriber management; new gauges automatically included |
 | Versioning | Semantic versioning with auto-increment | Track deployments, communicate change impact |
 | Scheduling | `schedule` library (in-process) | Simple, no external scheduler dependency (cron alternative documented) |
 | Configuration | Python constants + external credential files | Matches existing project conventions |
@@ -58,9 +59,9 @@ graph TD
     VAL -->|validates| CLIENT
     VAL -->|validates| GSHEET
     VAL -->|on success| USGS
-    USGS -->|HTTP GET JSON| USGS_API
-    USGS -->|gauge data| BUILD
-    SHEET -->|subscriber prefs| BUILD
+    USGS -->|HTTP GET JSON by state| USGS_API
+    USGS -->|all gauge data| BUILD
+    SHEET -->|subscriber emails + exclusions| BUILD
     SHEET -->|reads| GSHEET
     BUILD -->|HTML reports| SEND
     SEND -->|sends via| GMAIL
@@ -88,17 +89,17 @@ sequenceDiagram
     alt Validation fails
         V->>L: log error + exit
     end
-    V->>U: fetch_gauge_data(gauge_numbers)
+    V->>U: fetch_all_state_gauges(state_code)
     U->>U: HTTP GET with retries
     alt USGS unreachable after retries
         U->>L: log error + halt
     end
-    U-->>B: gauge_data dict
+    U-->>B: all_gauge_data dict
     V->>R: read_subscribers()
-    R-->>B: subscriber list
+    R-->>B: subscriber list (emails + exclusions)
     loop For each subscriber
-        B->>B: filter gauges by preferences
-        alt Report is empty
+        B->>B: filter OUT excluded gauges
+        alt Report is empty (all excluded or no data)
             B->>L: log skip reason
         else Report has content
             B->>E: send_email(recipient, html)
@@ -165,23 +166,23 @@ The version is:
 
 ### 2. USGS Data Fetcher (`usgs_fetcher.py`)
 
-Retrieves gauge data from the USGS Instantaneous Values API.
+Retrieves gauge data from the USGS Instantaneous Values API for all gauges in the configured state.
 
 ```python
 class USGSFetcher:
     def __init__(self, config: Config, http_client: requests.Session):
         ...
 
-    def fetch_gauge_data(self, gauge_numbers: list[str]) -> dict[str, GaugeEntry]:
+    def fetch_all_state_gauges(self) -> dict[str, GaugeEntry]:
         """
-        Fetches current readings for the given gauge numbers.
+        Fetches current readings for ALL gauges in the configured state.
         Returns a dict mapping gauge_number -> GaugeEntry.
         Raises USGSFetchError on unrecoverable failure.
         """
         ...
 
-    def _build_request_url(self, gauge_numbers: list[str]) -> str:
-        """Constructs the USGS API URL with sites and format parameters."""
+    def _build_request_url(self) -> str:
+        """Constructs the USGS API URL with stateCd and format parameters (no specific site numbers)."""
         ...
 
     def _parse_response(self, json_data: dict) -> dict[str, GaugeEntry]:
@@ -191,7 +192,7 @@ class USGSFetcher:
 
 **API URL format:**
 ```
-https://waterservices.usgs.gov/nwis/iv/?sites={comma_separated_gauge_numbers}&stateCd={state_code}&parameterCd=00060&format=json
+https://waterservices.usgs.gov/nwis/iv/?stateCd={state_code}&parameterCd=00060&format=json
 ```
 
 **USGS JSON response structure** (relevant fields):
@@ -219,7 +220,7 @@ https://waterservices.usgs.gov/nwis/iv/?sites={comma_separated_gauge_numbers}&st
 
 ### 3. Sheet Reader (`sheet_reader.py`)
 
-Reads subscriber preferences from Google Sheets.
+Reads subscriber emails and exclusion lists from Google Sheets.
 
 ```python
 class SheetReader:
@@ -230,22 +231,21 @@ class SheetReader:
         """Authenticates with Google Sheets using service account."""
         ...
 
-    def get_gauge_numbers(self) -> list[str]:
-        """Reads header row (row 2) to get gauge numbers from column D onward."""
-        ...
-
     def get_subscribers(self) -> list[Subscriber]:
-        """Reads subscriber rows (row 3+) and returns parsed Subscriber objects."""
+        """
+        Reads subscriber rows (row 2+) and returns parsed Subscriber objects.
+        Each subscriber has an email (col A) and an optional exclusion list (col B).
+        """
         ...
 
     def validate_structure(self) -> bool:
-        """Validates sheet has expected structure (header row with gauge numbers)."""
+        """Validates sheet has expected structure (header row with Email in col A and Exclude Gauges in col B)."""
         ...
 ```
 
 ### 4. Report Builder (`report_builder.py`)
 
-Builds personalized HTML email reports.
+Builds personalized HTML email reports by excluding subscriber-specified gauges.
 
 ```python
 class ReportBuilder:
@@ -253,8 +253,9 @@ class ReportBuilder:
         self, subscriber: Subscriber, gauge_data: dict[str, GaugeEntry]
     ) -> str | None:
         """
-        Builds HTML report for subscriber based on their gauge preferences.
-        Returns HTML string, or None if no gauges have data (empty report).
+        Builds HTML report for subscriber by including all gauge data EXCEPT
+        gauges in the subscriber's excluded_gauges list.
+        Returns HTML string, or None if all gauges are excluded or no data available.
         """
         ...
 
@@ -390,11 +391,10 @@ class Pipeline:
         """
         Executes the full pipeline:
         1. Validate configuration
-        2. Read gauge numbers from sheet
-        3. Fetch USGS data
-        4. Read subscribers
-        5. Build and send reports
-        6. Output run summary
+        2. Fetch ALL USGS data for configured state
+        3. Read subscribers (emails + exclusion lists)
+        4. Build and send reports (excluding each subscriber's excluded gauges)
+        5. Output run summary
         """
         ...
 ```
@@ -412,6 +412,16 @@ def start_scheduler(config: Config) -> None:
     ...
 ```
 
+### 12. Main Entry Point (`river_notify.py`)
+
+CLI entry point supporting three modes:
+
+| Flag | Behavior |
+|------|----------|
+| `--version` | Print version and exit |
+| `--run-now` | Execute pipeline once immediately and exit |
+| *(no flag)* | Start the daily scheduler loop |
+
 ## Data Models
 
 ```python
@@ -427,9 +437,9 @@ class GaugeEntry:
 
 @dataclass
 class Subscriber:
-    """A subscriber with their gauge preferences."""
+    """A subscriber with their gauge exclusion preferences."""
     email: str
-    subscribed_gauges: list[str]  # List of gauge numbers marked TRUE
+    excluded_gauges: list[str]  # List of gauge numbers to EXCLUDE (empty = receive all)
 
 
 @dataclass
@@ -456,11 +466,11 @@ class RunSummary:
 
 ### Google Sheet Structure
 
-| Row | Col A | Col B | Col C | Col D | Col E | ... |
-|-----|-------|-------|-------|-------|-------|-----|
-| 1 | (ignored) | (ignored) | (ignored) | (ignored) | (ignored) | ... |
-| 2 (Header) | | | | 12484500 | 12488500 | ... |
-| 3+ (Subscribers) | | | user@email.com | TRUE | FALSE | ... |
+| Row | Col A | Col B |
+|-----|-------|-------|
+| 1 (Header) | Email | Exclude Gauges |
+| 2+ (Subscribers) | user@email.com | 12484500, 12488500 |
+| 2+ (Subscribers) | user2@email.com | *(empty = receive all)* |
 
 ## Correctness Properties
 
@@ -474,13 +484,13 @@ class RunSummary:
 
 ### Property 2: Subscriber Sheet Parsing Correctness
 
-*For any* valid sheet data with a header row containing gauge numbers in columns D+ and subscriber rows with an email in column C and TRUE/FALSE flags in columns D+, parsing SHALL produce Subscriber objects where each subscriber's `subscribed_gauges` list contains exactly the gauge numbers whose corresponding column has a TRUE value.
+*For any* valid sheet data with a header row in row 1 and subscriber rows in row 2+ containing an email in column A and an optional comma-separated exclusion list in column B, parsing SHALL produce Subscriber objects where each subscriber's `excluded_gauges` list contains exactly the gauge numbers listed in their column B (or an empty list if column B is blank).
 
-**Validates: Requirements 2.2, 2.3, 2.5**
+**Validates: Requirements 2.3, 2.5, 2.6**
 
-### Property 3: Report Contains Only Subscribed Gauges With Data
+### Property 3: Report Contains All Gauges Except Excluded Ones
 
-*For any* subscriber with a set of subscribed gauges and any gauge data dictionary, the built report SHALL include exactly those gauges that are both in the subscriber's subscribed list AND present in the gauge data dictionary — no more, no less.
+*For any* subscriber with a set of excluded gauges and any gauge data dictionary, the built report SHALL include exactly those gauges that are present in the gauge data dictionary AND NOT in the subscriber's excluded_gauges list — no more, no less.
 
 **Validates: Requirements 3.1, 3.4**
 
@@ -504,7 +514,7 @@ class RunSummary:
 
 ### Property 7: Empty Report Suppression
 
-*For any* subscriber whose subscribed gauges all have no data in the gauge data dictionary, the system SHALL NOT attempt to send an email to that subscriber.
+*For any* subscriber whose excluded_gauges list contains all gauge numbers present in the gauge data dictionary (or when no gauge data is available), the system SHALL NOT attempt to send an email to that subscriber.
 
 **Validates: Requirements 10.1**
 
@@ -536,7 +546,7 @@ class RunSummary:
 | Sheet inaccessible | Startup validation | Log error, exit immediately | Operator checks service account permissions |
 | Sheet structure invalid | Startup validation | Log error, exit immediately | Operator fixes sheet layout |
 | USGS API transient error (5xx, timeout) | Data fetch | Retry with exponential backoff | Auto-recovery on retry |
-| USGS API permanent error (4xx) | Data fetch | Log error, halt run | Operator checks gauge numbers |
+| USGS API permanent error (4xx) | Data fetch | Log error, halt run | Operator checks state code |
 | Token expired | Email auth | Auto-refresh, persist new token | Auto-recovery |
 | Refresh token revoked | Email auth | Log error requiring re-auth, halt | Operator runs Token Generator |
 | Email send transient error (429, 5xx) | Email delivery | Retry with backoff, then skip subscriber | Auto-recovery or graceful degradation |

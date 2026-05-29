@@ -77,7 +77,7 @@ class TestPipelineIntegration:
 
         send_call_count = [0]
 
-        def mock_send(recipient, html_body):
+        def mock_send(recipient, html_body, state_code=None):
             idx = send_call_count[0]
             send_call_count[0] += 1
             return send_results[idx] if idx < len(send_results) else True

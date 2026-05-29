@@ -67,14 +67,16 @@ User stories derived from the requirements document, organized for agile sprint 
 
 **As a** system operator,
 **I want** subscriber preferences managed in a Google Sheet with a simple structure,
-**So that** I can add/remove subscribers and change gauge exclusions without touching code.
+**So that** I can add/remove subscribers and change gauge preferences without touching code.
 
 **Acceptance Criteria:**
 - System authenticates with Google Sheets using a service account
 - System reads the header row (row 1) to confirm expected column layout
 - System reads subscriber emails from column A, rows 2 onward
-- System reads optional comma-separated exclusion lists from column B
-- Subscribers with empty exclusion lists receive ALL gauges
+- System reads optional comma-separated inclusion lists from column B
+- System reads optional state code overrides from column C
+- Subscribers with empty inclusion lists receive ALL gauges for their state
+- Subscribers with empty state column use the global default state
 - Rows with empty/blank email are skipped without error
 
 **Story Points:** 5
@@ -83,9 +85,9 @@ User stories derived from the requirements document, organized for agile sprint 
 
 | ID | Test Case | Steps | Expected Result |
 |----|-----------|-------|-----------------|
-| TC-2.1.1 | Read header row | Sheet has "Email" in A1, "Exclude Gauges" in B1 | System confirms expected structure |
-| TC-2.1.2 | Read subscriber with no exclusions | Row 2 has email, column B is blank | Subscriber object has empty excluded_gauges list (receives all) |
-| TC-2.1.3 | Read subscriber with exclusions | Row has email, B has "12484500, 12488500" | Subscriber has those 2 gauges in excluded_gauges |
+| TC-2.1.1 | Read header row | Sheet has "Email" in A1, "Include Gauges" in B1, "State" in C1 | System confirms expected structure |
+| TC-2.1.2 | Read subscriber with no inclusions | Row 2 has email, column B is blank | Subscriber object has empty included_gauges list (receives all) |
+| TC-2.1.3 | Read subscriber with inclusions | Row has email, B has "12484500, 12488500" | Subscriber has those 2 gauges in included_gauges |
 | TC-2.1.4 | Skip empty email row | Row 3 has blank in column A | Row is skipped, no error logged |
 | TC-2.1.5 | Multiple subscribers | 5 rows with valid emails | 5 Subscriber objects returned |
 | TC-2.1.6 | Service account auth | Provide valid service account JSON | Authentication succeeds, sheet is readable |
@@ -102,10 +104,10 @@ User stories derived from the requirements document, organized for agile sprint 
 **So that** I see relevant information without clutter.
 
 **Acceptance Criteria:**
-- Report includes all gauges from the state EXCEPT those in the subscriber's exclusion list
+- Report includes gauges from the subscriber's state filtered by their inclusion list (all if empty, only listed if populated)
 - Each gauge entry shows: clickable USGS link, gauge name, date/time, flow level
 - Report is formatted as HTML
-- Exclusion entries not matching any USGS gauge are silently ignored
+- Inclusion entries not matching any USGS gauge are silently ignored
 
 **Story Points:** 3
 
@@ -113,12 +115,12 @@ User stories derived from the requirements document, organized for agile sprint 
 
 | ID | Test Case | Steps | Expected Result |
 |----|-----------|-------|-----------------|
-| TC-3.1.1 | Subscriber with no exclusions | Subscriber has empty exclusion list, 5 gauges available | Report contains all 5 gauge entries |
-| TC-3.1.2 | Subscriber with exclusions | Subscriber excludes 2 of 5 gauges | Report contains exactly 3 gauge entries |
+| TC-3.1.1 | Subscriber with no inclusions | Subscriber has empty inclusion list, 5 gauges available | Report contains all 5 gauge entries |
+| TC-3.1.2 | Subscriber with inclusions | Subscriber includes 3 of 5 gauges | Report contains exactly 3 gauge entries |
 | TC-3.1.3 | HTML format | Build report for a subscriber | Output is valid HTML with proper tags |
 | TC-3.1.4 | Clickable USGS link | Check gauge entry in report | Contains `<a href="...">` with correct USGS URL |
 | TC-3.1.5 | All fields displayed | Check a gauge entry | Shows gauge name, date/time, and flow level |
-| TC-3.1.6 | Invalid exclusion silently ignored | Subscriber excludes gauge "99999999" not in USGS data | No error, report includes all available gauges |
+| TC-3.1.6 | Invalid inclusion silently ignored | Subscriber includes gauge "99999999" not in USGS data | No error, report includes only gauges that exist in data |
 | TC-3.1.7 | Version in email footer | Build any report | Footer contains current app version (e.g., "v0.1.0") |
 
 ---
@@ -126,11 +128,11 @@ User stories derived from the requirements document, organized for agile sprint 
 ### Story 3.2: Suppress Empty Email Reports
 
 **As a** subscriber,
-**I don't want** to receive an empty email when all gauges are excluded or no data is available,
+**I don't want** to receive an empty email when no gauges match my inclusion list or no data is available,
 **So that** my inbox isn't cluttered with useless messages.
 
 **Acceptance Criteria:**
-- No email is sent if all gauges are in the subscriber's exclusion list or no data is available
+- No email is sent if no gauges match the subscriber's inclusion list or no data is available
 - System logs that the subscriber was skipped with reason
 
 **Story Points:** 2
@@ -139,9 +141,9 @@ User stories derived from the requirements document, organized for agile sprint 
 
 | ID | Test Case | Steps | Expected Result |
 |----|-----------|-------|-----------------|
-| TC-3.2.1 | All gauges excluded | Subscriber excludes all gauges returned by USGS | No email sent, log shows "skipped: all gauges excluded" |
+| TC-3.2.1 | No matching gauges | Subscriber includes only gauges not in USGS data | No email sent, log shows "skipped: no matching gauges" |
 | TC-3.2.2 | No USGS data available | USGS returns empty data set | No email sent, log shows "skipped: no gauge data" |
-| TC-3.2.3 | Some gauges not excluded | Subscriber excludes 2 of 5 gauges | Email IS sent with the 3 remaining gauges |
+| TC-3.2.3 | Some gauges included | Subscriber includes 3 of 5 gauges | Email IS sent with the 3 included gauges |
 | TC-3.2.4 | Skip reason logged | Trigger empty report suppression | Log entry includes subscriber email and skip reason |
 
 ---
@@ -390,9 +392,10 @@ User stories derived from the requirements document, organized for agile sprint 
 **So that** the system can read subscriber preferences correctly.
 
 **Acceptance Criteria:**
-- Sheet has header row (row 1) with "Email" in column A and "Exclude Gauges" in column B
+- Sheet has header row (row 1) with "Email" in column A, "Include Gauges" in column B, and optionally "State" in column C
 - Sheet has subscriber emails in column A, rows 2+
-- Sheet has optional comma-separated gauge exclusion lists in column B
+- Sheet has optional comma-separated gauge inclusion lists in column B
+- Sheet has optional two-letter state codes in column C
 - Sheet is shared with the service account email
 
 **Story Points:** 1 (manual setup)
@@ -401,7 +404,7 @@ User stories derived from the requirements document, organized for agile sprint 
 
 | ID | Test Case | Steps | Expected Result |
 |----|-----------|-------|-----------------|
-| TC-9.2.1 | Correct sheet structure | Create sheet per spec, run system | System reads all subscribers and exclusion lists correctly |
+| TC-9.2.1 | Correct sheet structure | Create sheet per spec, run system | System reads all subscribers, inclusion lists, and state codes correctly |
 | TC-9.2.2 | Sheet shared with service account | Share sheet, run system | No authentication errors |
 | TC-9.2.3 | Unshared sheet | Don't share sheet, run system | Validation fails with "sheet not accessible" error |
 

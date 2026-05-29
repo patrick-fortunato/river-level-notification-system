@@ -21,6 +21,7 @@ class Subscriber:
 
     email: str
     included_gauges: list[str] = field(default_factory=list)
+    state_code: str = ""  # Empty = use global default from config
 
 
 @dataclass

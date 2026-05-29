@@ -2,7 +2,7 @@
 
 ## Overview
 
-Build a Python application that fetches real-time river gauge data from the USGS Water Services REST API for all gauges in a configured US state, reads subscriber emails and exclusion preferences from a Google Sheet, and sends personalized HTML email reports via the Gmail API. Subscribers receive all gauges by default and can optionally exclude specific gauges. The implementation follows an incremental approach: core data models and utilities first, then individual components, then integration and orchestration.
+Build a Python application that fetches real-time river gauge data from the USGS Water Services REST API for all gauges in each subscriber's configured US state, reads subscriber emails, inclusion preferences, and optional state overrides from a Google Sheet, and sends personalized HTML email reports via the Gmail API. Subscribers receive all gauges by default and can optionally specify which gauges to include. Each subscriber can override the default state. The implementation follows an incremental approach: core data models and utilities first, then individual components, then integration and orchestration.
 
 ## Tasks
 
@@ -17,8 +17,8 @@ Build a Python application that fetches real-time river gauge data from the USGS
 
   - [x] 0.2 Create the subscriber Google Sheet
     - Create a new Google Sheet
-    - Row 1 (Header Row): Column A = "Email", Column B = "Exclude Gauges"
-    - Row 2+ (Subscriber Rows): Column A = subscriber email address; Column B = optional comma-separated list of gauge numbers to exclude (leave blank to receive all gauges)
+    - Row 1 (Header Row): Column A = "Email", Column B = "Include Gauges", Column C = "State" (optional)
+    - Row 2+ (Subscriber Rows): Column A = subscriber email address; Column B = optional comma-separated list of gauge numbers to include (leave blank to receive all gauges); Column C = optional two-letter state code (leave blank to use default)
     - Note the Spreadsheet ID from the URL (the long string between `/d/` and `/edit`)
     - _Requirements: 2.2, 2.3, 2.5, 2.6_
 
@@ -28,7 +28,7 @@ Build a Python application that fetches real-time river gauge data from the USGS
     - _Requirements: 2.1_
 
   - [x] 0.4 Generate the Gmail OAuth token
-    - Run `python src/create_token.py` after Task 10.2 is complete (or use the existing `Create_Token_JSON-for_Gmail.py` script)
+    - Run `python src/create_token.py` after Task 10.2 is complete
     - Approve the consent screen in your browser
     - Verify `token.json` is created in the project directory
     - _Requirements: 5.1, 5.2, 5.3_
@@ -46,7 +46,7 @@ Build a Python application that fetches real-time river gauge data from the USGS
 
   - [x] 1.2 Implement data models (`src/models.py`)
     - Define `GaugeEntry` dataclass with fields: gauge_number, gauge_name, usgs_page_url, reading_datetime, flow_level
-    - Define `Subscriber` dataclass with fields: email, excluded_gauges (list of gauge number strings to exclude; empty = receive all)
+    - Define `Subscriber` dataclass with fields: email, included_gauges (list of gauge number strings to include; empty = receive all), state_code (optional state override; empty = use default)
     - Define `RunSummary` dataclass with fields: total_subscribers, emails_sent, emails_failed, subscribers_skipped, skip_reasons, start_time, end_time
     - _Requirements: 1.4, 2.3, 2.6, 11.2_
 
@@ -104,15 +104,16 @@ Build a Python application that fetches real-time river gauge data from the USGS
   - [x] 4.1 Implement Google Sheet reader (`src/sheet_reader.py`)
     - Implement `SheetReader` class with `__init__(config)`
     - Implement `authenticate()` using gspread with service account credentials
-    - Implement `get_subscribers()` reading rows 2+ to build Subscriber objects (email from col A, comma-separated exclusion list from col B)
-    - Parse column B as a comma-separated list of gauge numbers to exclude; treat empty/blank as no exclusions (receive all gauges)
+    - Implement `get_subscribers()` reading rows 2+ to build Subscriber objects (email from col A, comma-separated inclusion list from col B, optional state code from col C)
+    - Parse column B as a comma-separated list of gauge numbers to include; treat empty/blank as no filter (receive all gauges)
+    - Parse column C as a two-letter state code; treat empty/blank as use global default
     - Skip rows with empty/blank email in column A
     - Implement `validate_structure()` checking sheet accessibility and header row has expected column labels
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6_
 
   - [x]* 4.2 Write property test for subscriber sheet parsing
     - **Property 2: Subscriber Sheet Parsing Correctness**
-    - Generate arbitrary sheet data with subscriber rows containing emails and comma-separated exclusion lists, verify parsed Subscriber objects have excluded_gauges matching exactly the gauge numbers listed in column B
+    - Generate arbitrary sheet data with subscriber rows containing emails and comma-separated inclusion lists, verify parsed Subscriber objects have included_gauges matching exactly the gauge numbers listed in column B
     - **Validates: Requirements 2.3, 2.5, 2.6**
 
 - [x] 5. Checkpoint - Ensure all tests pass
@@ -121,15 +122,15 @@ Build a Python application that fetches real-time river gauge data from the USGS
 - [x] 6. Implement Report Builder
   - [x] 6.1 Implement report builder (`src/report_builder.py`)
     - Implement `ReportBuilder` class
-    - Implement `build_report(subscriber, gauge_data)` that includes ALL gauges from gauge_data EXCEPT those in subscriber's excluded_gauges list, returns HTML string or None if all gauges are excluded or no data available
+    - Implement `build_report(subscriber, gauge_data)` that includes gauges from gauge_data based on subscriber's included_gauges list (empty = all, populated = only those listed), returns HTML string or None if no gauges match or no data available
     - Implement `_render_gauge_entry(gauge_number, entry)` rendering a single gauge as HTML with clickable USGS link, gauge name, reading datetime, and flow level
     - Implement `_render_footer(version)` rendering the email footer with the application version number
     - Format complete report as HTML with all included gauge entries and version footer
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 10.1_
 
   - [x]* 6.2 Write property test for report filtering
-    - **Property 3: Report Contains All Gauges Except Excluded Ones**
-    - Generate arbitrary subscribers with exclusion lists and gauge data dicts, verify the report includes exactly those gauges present in gauge_data AND NOT in the subscriber's excluded_gauges list
+    - **Property 3: Report Contains Only Included Gauges**
+    - Generate arbitrary subscribers with inclusion lists and gauge data dicts, verify the report includes exactly those gauges present in gauge_data AND in the subscriber's included_gauges list (or all if empty)
     - **Validates: Requirements 3.1, 3.4**
 
   - [x]* 6.3 Write property test for HTML rendering completeness
@@ -139,7 +140,7 @@ Build a Python application that fetches real-time river gauge data from the USGS
 
   - [x]* 6.4 Write property test for empty report suppression
     - **Property 7: Empty Report Suppression**
-    - Generate subscribers whose excluded_gauges list contains all gauge numbers in the gauge data dict (or gauge data is empty), verify build_report returns None
+    - Generate subscribers whose included_gauges list results in no matching gauges from the gauge data dict (or gauge data is empty), verify build_report returns None
     - **Validates: Requirements 10.1**
 
 - [x] 7. Implement Email Sender
@@ -173,7 +174,7 @@ Build a Python application that fetches real-time river gauge data from the USGS
     - Implement `ConfigValidator` class with `__init__(config)`
     - Implement `validate_all()` returning list of error messages (empty = all passed)
     - Implement `_check_file_exists(path, description)` checking service_account_file, gmail_token_file, gmail_client_secrets_file
-    - Implement `_check_sheet_accessible()` verifying Google Sheet is reachable and has expected header row structure (Email in col A, Exclude Gauges in col B)
+    - Implement `_check_sheet_accessible()` verifying Google Sheet is reachable and has expected header row structure (Email in col A, Include Gauges in col B, optionally State in col C)
     - _Requirements: 12.1, 12.2, 12.3_
 
   - [x]* 8.2 Write property test for validation failure halts pipeline
@@ -187,7 +188,7 @@ Build a Python application that fetches real-time river gauge data from the USGS
 - [x] 10. Implement Pipeline Orchestrator and Token Generator
   - [x] 10.1 Implement pipeline orchestrator (`src/pipeline.py`)
     - Implement `Pipeline` class with `__init__(config)`
-    - Implement `run()` method executing full flow: validate config → fetch ALL USGS data for configured state → read subscribers (emails + exclusion lists) → build and send reports (excluding each subscriber's excluded gauges, with rate limiting) → output run summary
+    - Implement `run()` method executing full flow: validate config → read subscribers → fetch USGS data for each unique state across subscribers → build and send reports (filtering by each subscriber's included gauges, with rate limiting) → output run summary
     - On validation failure: log errors and exit without further processing
     - On USGS fetch failure: log error and halt
     - On individual email failure: log and continue to next subscriber

@@ -1,9 +1,11 @@
 """Pipeline orchestrator for the River Level Notification System.
 
-Coordinates the full execution flow: validate configuration, fetch USGS data,
-read subscribers, build and send personalized reports, and output a run summary.
+Coordinates the full execution flow: validate configuration, fetch USGS data
+per unique state across subscribers, read subscribers, build and send
+personalized reports, and output a run summary.
 """
 
+from collections import defaultdict
 from datetime import datetime, timezone
 
 import requests
@@ -12,7 +14,7 @@ from src.__version__ import __version__
 from src.config import Config
 from src.email_sender import EmailSender, TokenRefreshError
 from src.logger import PipelineLogger
-from src.models import RunSummary
+from src.models import RunSummary, Subscriber
 from src.report_builder import ReportBuilder
 from src.sheet_reader import SheetReader
 from src.usgs_fetcher import USGSFetcher, USGSFetchError
@@ -57,22 +59,7 @@ class Pipeline:
                 end_time=end_time,
             )
 
-        # Step 2: Fetch USGS data
-        gauge_data = self._fetch_gauge_data()
-        if gauge_data is None:
-            end_time = datetime.now(timezone.utc)
-            self._logger.output_summary(0)
-            return RunSummary(
-                total_subscribers=0,
-                emails_sent=self._logger.emails_sent,
-                emails_failed=self._logger.emails_failed,
-                subscribers_skipped=self._logger.subscribers_skipped,
-                skip_reasons=list(self._logger.skip_reasons),
-                start_time=start_time,
-                end_time=end_time,
-            )
-
-        # Step 3: Read subscribers
+        # Step 2: Read subscribers
         subscribers = self._read_subscribers()
         if subscribers is None:
             end_time = datetime.now(timezone.utc)
@@ -89,6 +76,21 @@ class Pipeline:
 
         total_subscribers = len(subscribers)
         self._logger.log("INFO", f"Processing {total_subscribers} subscribers")
+
+        # Step 3: Determine unique states and fetch USGS data for each
+        state_gauge_data = self._fetch_gauge_data_for_subscribers(subscribers)
+        if state_gauge_data is None:
+            end_time = datetime.now(timezone.utc)
+            self._logger.output_summary(total_subscribers)
+            return RunSummary(
+                total_subscribers=total_subscribers,
+                emails_sent=self._logger.emails_sent,
+                emails_failed=self._logger.emails_failed,
+                subscribers_skipped=self._logger.subscribers_skipped,
+                skip_reasons=list(self._logger.skip_reasons),
+                start_time=start_time,
+                end_time=end_time,
+            )
 
         # Step 4: Build and send reports
         email_sender = self._authenticate_email_sender()
@@ -111,6 +113,13 @@ class Pipeline:
         report_builder = ReportBuilder()
 
         for subscriber in subscribers:
+            effective_state = (
+                subscriber.state_code
+                if subscriber.state_code
+                else self._config.usgs_state_code
+            )
+            gauge_data = state_gauge_data.get(effective_state, {})
+
             report = report_builder.build_report(subscriber, gauge_data)
 
             if report is None:
@@ -165,30 +174,68 @@ class Pipeline:
         self._logger.log("INFO", "Configuration validation passed")
         return True
 
-    def _fetch_gauge_data(self) -> dict | None:
-        """Fetch all USGS gauge data for the configured state.
+    def _fetch_gauge_data_for_subscribers(
+        self, subscribers: list[Subscriber]
+    ) -> dict[str, dict] | None:
+        """Fetch USGS gauge data for all unique states across subscribers.
+
+        Groups subscribers by their effective state (per-subscriber override
+        or global default), then fetches data once per unique state.
+
+        Args:
+            subscribers: List of subscribers to determine required states.
 
         Returns:
-            A dict mapping gauge_number -> GaugeEntry, or None on failure.
+            A dict mapping state_code -> {gauge_number -> GaugeEntry},
+            or None if fetching fails for any state.
         """
+        # Determine unique states needed
+        unique_states: set[str] = set()
+        for sub in subscribers:
+            effective_state = (
+                sub.state_code if sub.state_code else self._config.usgs_state_code
+            )
+            unique_states.add(effective_state)
+
         self._logger.log(
             "INFO",
-            f"Fetching USGS data for state: {self._config.usgs_state_code} "
-            f"({self._config.state_name})",
+            f"Fetching USGS data for {len(unique_states)} state(s): "
+            f"{', '.join(sorted(unique_states))}",
         )
 
-        try:
-            session = requests.Session()
-            fetcher = USGSFetcher(self._config, session)
-            gauge_data = fetcher.fetch_all_state_gauges()
-            self._logger.log(
-                "INFO", f"Retrieved {len(gauge_data)} gauge readings"
-            )
-            return gauge_data
-        except USGSFetchError as exc:
-            self._logger.log("ERROR", f"USGS data fetch failed: {exc}")
-            self._logger.log("ERROR", "Halting pipeline due to USGS failure.")
-            return None
+        state_gauge_data: dict[str, dict] = {}
+        session = requests.Session()
+
+        for state_code in sorted(unique_states):
+            self._logger.log("INFO", f"Fetching USGS data for state: {state_code}")
+            try:
+                # Create a temporary config with this state code for the fetcher
+                state_config = Config(
+                    usgs_base_url=self._config.usgs_base_url,
+                    usgs_format=self._config.usgs_format,
+                    usgs_parameter_code=self._config.usgs_parameter_code,
+                    usgs_state_code=state_code,
+                    max_retries=self._config.max_retries,
+                    initial_backoff_seconds=self._config.initial_backoff_seconds,
+                    backoff_multiplier=self._config.backoff_multiplier,
+                )
+                fetcher = USGSFetcher(state_config, session)
+                gauge_data = fetcher.fetch_all_state_gauges()
+                self._logger.log(
+                    "INFO",
+                    f"Retrieved {len(gauge_data)} gauge readings for {state_code}",
+                )
+                state_gauge_data[state_code] = gauge_data
+            except USGSFetchError as exc:
+                self._logger.log(
+                    "ERROR", f"USGS data fetch failed for {state_code}: {exc}"
+                )
+                self._logger.log(
+                    "ERROR", "Halting pipeline due to USGS failure."
+                )
+                return None
+
+        return state_gauge_data
 
     def _read_subscribers(self) -> list | None:
         """Read subscribers from the Google Sheet.

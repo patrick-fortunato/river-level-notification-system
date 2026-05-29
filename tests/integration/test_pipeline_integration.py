@@ -221,3 +221,87 @@ class TestPipelineIntegration:
         mock_sender.send_email.assert_not_called()
         assert summary.subscribers_skipped == 2
         assert summary.emails_sent == 0
+
+
+    def test_per_subscriber_state_fetches_multiple_states(self):
+        """Verify pipeline fetches data for each unique state across subscribers."""
+        config = _make_config(usgs_state_code="OR")
+
+        or_gauge_data = {
+            "12345": GaugeEntry(
+                gauge_number="12345",
+                gauge_name="RIVER A AT PORTLAND",
+                usgs_page_url="https://waterdata.usgs.gov/nwis/uv?site_no=12345",
+                reading_datetime="2025-01-15T08:00:00",
+                flow_level="1500",
+            ),
+        }
+        wa_gauge_data = {
+            "99999": GaugeEntry(
+                gauge_number="99999",
+                gauge_name="RIVER C AT SEATTLE",
+                usgs_page_url="https://waterdata.usgs.gov/nwis/uv?site_no=99999",
+                reading_datetime="2025-01-15T10:00:00",
+                flow_level="2000",
+            ),
+        }
+
+        subscribers = [
+            Subscriber(email="or_user@example.com", included_gauges=[], state_code=""),
+            Subscriber(email="wa_user@example.com", included_gauges=[], state_code="WA"),
+        ]
+
+        call_count = [0]
+
+        def mock_fetch():
+            call_count[0] += 1
+            # Return different data based on call order (OR first, WA second)
+            if call_count[0] == 1:
+                return or_gauge_data
+            return wa_gauge_data
+
+        with patch("src.pipeline.ConfigValidator") as mock_validator, \
+             patch("src.pipeline.USGSFetcher") as mock_fetcher_cls, \
+             patch("src.pipeline.SheetReader") as mock_reader_cls, \
+             patch("src.pipeline.EmailSender") as mock_sender_cls:
+
+            mock_validator.return_value.validate_all.return_value = []
+
+            mock_fetcher_cls.return_value.fetch_all_state_gauges.side_effect = mock_fetch
+
+            mock_reader = MagicMock()
+            mock_reader.get_subscribers.return_value = subscribers
+            mock_reader_cls.return_value = mock_reader
+
+            mock_sender = MagicMock()
+            mock_sender.send_email.return_value = True
+            mock_sender_cls.return_value = mock_sender
+
+            pipeline = Pipeline(config)
+            summary = pipeline.run()
+
+            # Should have fetched data for 2 states (OR default + WA override)
+            assert mock_fetcher_cls.return_value.fetch_all_state_gauges.call_count == 2
+            assert summary.emails_sent == 2
+
+    def test_empty_state_column_uses_default(self):
+        """Verify subscriber with empty state_code uses the global default."""
+        config = _make_config(usgs_state_code="OR")
+        gauge_data = _make_gauge_data()
+
+        # Both subscribers have empty state_code — should use "OR" default
+        subscribers = [
+            Subscriber(email="user1@example.com", included_gauges=[], state_code=""),
+            Subscriber(email="user2@example.com", included_gauges=[], state_code=""),
+        ]
+
+        summary, _, mock_fetcher, _, mock_sender = self._run_pipeline_with_mocks(
+            config,
+            gauge_data=gauge_data,
+            subscribers=subscribers,
+            send_results=[True, True],
+        )
+
+        # Only one USGS fetch call (both use the same default state)
+        mock_fetcher.return_value.fetch_all_state_gauges.assert_called_once()
+        assert summary.emails_sent == 2

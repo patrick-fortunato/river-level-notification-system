@@ -2,7 +2,7 @@
 
 ## Overview
 
-The River Level Notification System is a Python application that retrieves real-time river gauge data from the USGS Water Services REST API for ALL gauges in a configured US state, reads subscriber emails and optional gauge exclusion preferences from a Google Sheet, and sends personalized HTML email reports via the Gmail API. Subscribers receive all gauges by default and can opt out of specific gauges via a comma-separated exclusion list in the sheet. It replaces the existing Selenium-based screen scraping approach with a structured JSON API integration, improving reliability and eliminating browser dependencies.
+The River Level Notification System is a Python application that retrieves real-time river gauge data from the USGS Water Services REST API for ALL gauges in each subscriber's configured US state, reads subscriber emails, optional gauge inclusion preferences, and optional state overrides from a Google Sheet, and sends personalized HTML email reports via the Gmail API. Subscribers receive all gauges by default and can specify which gauges to include via a comma-separated inclusion list. Each subscriber can also override the default state. It replaces the existing Selenium-based screen scraping approach with a structured JSON API integration, improving reliability and eliminating browser dependencies.
 
 The system consists of two executables:
 1. **Main Pipeline** (`river_notify.py`) — the daily notification workflow (supports `--run-now` for immediate one-shot execution, `--version` to print version)
@@ -18,7 +18,7 @@ The pipeline runs on a configurable daily schedule and includes automatic token 
 | Subscriber storage | Google Sheets (service account) | Non-technical users can manage subscriptions without code changes |
 | Email delivery | Gmail API (OAuth2) | Reliable delivery, avoids SMTP configuration issues |
 | State selection | Configurable state code (default OR) | Supports any US state without code changes; fetches ALL gauges for the state |
-| Gauge selection | All gauges by default, opt-out via exclusion list | Simplifies subscriber management; new gauges automatically included |
+| Gauge selection | All gauges by default, opt-in via inclusion list | Simplifies subscriber management; new gauges automatically included unless subscriber specifies a list |
 | Versioning | Semantic versioning with auto-increment | Track deployments, communicate change impact |
 | Scheduling | `schedule` library (in-process) | Simple, no external scheduler dependency (cron alternative documented) |
 | Configuration | Python constants + external credential files | Matches existing project conventions |
@@ -61,7 +61,7 @@ graph TD
     VAL -->|on success| USGS
     USGS -->|HTTP GET JSON by state| USGS_API
     USGS -->|all gauge data| BUILD
-    SHEET -->|subscriber emails + exclusions| BUILD
+    SHEET -->|subscriber emails + inclusions + states| BUILD
     SHEET -->|reads| GSHEET
     BUILD -->|HTML reports| SEND
     SEND -->|sends via| GMAIL
@@ -96,10 +96,10 @@ sequenceDiagram
     end
     U-->>B: all_gauge_data dict
     V->>R: read_subscribers()
-    R-->>B: subscriber list (emails + exclusions)
+    R-->>B: subscriber list (emails + inclusions + states)
     loop For each subscriber
-        B->>B: filter OUT excluded gauges
-        alt Report is empty (all excluded or no data)
+        B->>B: filter to included gauges
+        alt Report is empty (no matching gauges or no data)
             B->>L: log skip reason
         else Report has content
             B->>E: send_email(recipient, html)
@@ -220,7 +220,7 @@ https://waterservices.usgs.gov/nwis/iv/?stateCd={state_code}&parameterCd=00060&f
 
 ### 3. Sheet Reader (`sheet_reader.py`)
 
-Reads subscriber emails and exclusion lists from Google Sheets.
+Reads subscriber emails, inclusion lists, and state overrides from Google Sheets.
 
 ```python
 class SheetReader:
@@ -234,18 +234,19 @@ class SheetReader:
     def get_subscribers(self) -> list[Subscriber]:
         """
         Reads subscriber rows (row 2+) and returns parsed Subscriber objects.
-        Each subscriber has an email (col A) and an optional exclusion list (col B).
+        Each subscriber has an email (col A), an optional inclusion list (col B),
+        and an optional state code (col C).
         """
         ...
 
     def validate_structure(self) -> bool:
-        """Validates sheet has expected structure (header row with Email in col A and Exclude Gauges in col B)."""
+        """Validates sheet has expected structure (header row with Email in col A, Include Gauges in col B, optionally State in col C)."""
         ...
 ```
 
 ### 4. Report Builder (`report_builder.py`)
 
-Builds personalized HTML email reports by excluding subscriber-specified gauges.
+Builds personalized HTML email reports based on subscriber inclusion preferences.
 
 ```python
 class ReportBuilder:
@@ -253,9 +254,9 @@ class ReportBuilder:
         self, subscriber: Subscriber, gauge_data: dict[str, GaugeEntry]
     ) -> str | None:
         """
-        Builds HTML report for subscriber by including all gauge data EXCEPT
-        gauges in the subscriber's excluded_gauges list.
-        Returns HTML string, or None if all gauges are excluded or no data available.
+        Builds HTML report for subscriber by including gauges from gauge_data
+        based on the subscriber's included_gauges list (empty = all, populated = only those listed).
+        Returns HTML string, or None if no gauges match or no data available.
         """
         ...
 
@@ -391,9 +392,9 @@ class Pipeline:
         """
         Executes the full pipeline:
         1. Validate configuration
-        2. Fetch ALL USGS data for configured state
-        3. Read subscribers (emails + exclusion lists)
-        4. Build and send reports (excluding each subscriber's excluded gauges)
+        2. Read subscribers (emails + inclusion lists + state overrides)
+        3. Fetch USGS data for each unique state across subscribers
+        4. Build and send reports (filtering by each subscriber's included gauges)
         5. Output run summary
         """
         ...
@@ -437,9 +438,10 @@ class GaugeEntry:
 
 @dataclass
 class Subscriber:
-    """A subscriber with their gauge exclusion preferences."""
+    """A subscriber with their gauge inclusion preferences."""
     email: str
-    excluded_gauges: list[str]  # List of gauge numbers to EXCLUDE (empty = receive all)
+    included_gauges: list[str]  # List of gauge numbers to INCLUDE (empty = receive all)
+    state_code: str  # Two-letter state code override (empty = use global default)
 
 
 @dataclass
@@ -466,11 +468,12 @@ class RunSummary:
 
 ### Google Sheet Structure
 
-| Row | Col A | Col B |
-|-----|-------|-------|
-| 1 (Header) | Email | Exclude Gauges |
-| 2+ (Subscribers) | user@email.com | 12484500, 12488500 |
-| 2+ (Subscribers) | user2@email.com | *(empty = receive all)* |
+| Row | Col A | Col B | Col C |
+|-----|-------|-------|-------|
+| 1 (Header) | Email | Include Gauges | State |
+| 2+ (Subscribers) | user@email.com | 12484500, 12488500 | OR |
+| 2+ (Subscribers) | user2@email.com | *(empty = receive all)* | WA |
+| 2+ (Subscribers) | user3@email.com | 14321000 | *(empty = use default)* |
 
 ## Correctness Properties
 
@@ -484,13 +487,13 @@ class RunSummary:
 
 ### Property 2: Subscriber Sheet Parsing Correctness
 
-*For any* valid sheet data with a header row in row 1 and subscriber rows in row 2+ containing an email in column A and an optional comma-separated exclusion list in column B, parsing SHALL produce Subscriber objects where each subscriber's `excluded_gauges` list contains exactly the gauge numbers listed in their column B (or an empty list if column B is blank).
+*For any* valid sheet data with a header row in row 1 and subscriber rows in row 2+ containing an email in column A, an optional comma-separated inclusion list in column B, and an optional state code in column C, parsing SHALL produce Subscriber objects where each subscriber's `included_gauges` list contains exactly the gauge numbers listed in their column B (or an empty list if column B is blank), and `state_code` matches column C (or empty if column C is blank).
 
 **Validates: Requirements 2.3, 2.5, 2.6**
 
-### Property 3: Report Contains All Gauges Except Excluded Ones
+### Property 3: Report Contains Only Included Gauges
 
-*For any* subscriber with a set of excluded gauges and any gauge data dictionary, the built report SHALL include exactly those gauges that are present in the gauge data dictionary AND NOT in the subscriber's excluded_gauges list — no more, no less.
+*For any* subscriber with an inclusion list and any gauge data dictionary, the built report SHALL include exactly those gauges that are present in the gauge data dictionary AND in the subscriber's included_gauges list (or all gauges if the list is empty) — no more, no less.
 
 **Validates: Requirements 3.1, 3.4**
 
@@ -514,7 +517,7 @@ class RunSummary:
 
 ### Property 7: Empty Report Suppression
 
-*For any* subscriber whose excluded_gauges list contains all gauge numbers present in the gauge data dictionary (or when no gauge data is available), the system SHALL NOT attempt to send an email to that subscriber.
+*For any* subscriber whose included_gauges list results in no matching gauges from the gauge data dictionary (or when no gauge data is available), the system SHALL NOT attempt to send an email to that subscriber.
 
 **Validates: Requirements 10.1**
 

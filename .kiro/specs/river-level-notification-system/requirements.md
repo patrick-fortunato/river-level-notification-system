@@ -2,19 +2,19 @@
 
 ## Introduction
 
-The River Level Notification System retrieves real-time river gauge data from the USGS water monitoring service for ALL gauges in a configured US state, reads subscriber emails and optional gauge exclusion preferences from a Google Sheet, and sends personalized HTML email reports to each subscriber via the Gmail API. Subscribers receive all gauges by default and can opt out of specific gauges via a comma-separated exclusion list. The system runs on a configurable daily schedule and includes a separate utility for Gmail OAuth token generation.
+The River Level Notification System retrieves real-time river gauge data from the USGS water monitoring service for ALL gauges in a configured US state (or per-subscriber state override), reads subscriber emails and optional gauge inclusion preferences from a Google Sheet, and sends personalized HTML email reports to each subscriber via the Gmail API. Subscribers receive all gauges by default and can optionally specify which gauges to include via a comma-separated inclusion list. Each subscriber can also override the default state. The system runs on a configurable daily schedule and includes a separate utility for Gmail OAuth token generation.
 
 ## Glossary
 
 - **Notification_System**: The main application that orchestrates data retrieval, subscriber processing, and email delivery.
 - **USGS_Data_Service**: The United States Geological Survey water monitoring service that provides real-time river gauge readings for US states.
-- **Subscriber_Sheet**: A Google Sheet that stores subscriber email addresses and their optional gauge exclusion lists.
+- **Subscriber_Sheet**: A Google Sheet that stores subscriber email addresses, their optional gauge inclusion lists, and optional state code overrides.
 - **Gauge_Number**: A unique numeric identifier assigned by USGS to each river monitoring station.
 - **Gauge_Entry**: A data record for a single river gauge containing: gauge name, USGS page link, date/time of reading, and flow level.
-- **Subscriber_Row**: A row in the Subscriber_Sheet (row 2 onward) containing a recipient email address in column A and an optional comma-separated list of gauge numbers to exclude in column B.
-- **Header_Row**: Row 1 of the Subscriber_Sheet containing column headers ("Email" in column A, "Exclude Gauges" in column B).
-- **Exclusion_List**: A comma-separated list of gauge numbers in column B of a Subscriber_Row that the subscriber does NOT want to receive in their report.
-- **Email_Report**: A personalized HTML email containing gauge entries for all gauges in the configured state except those in the subscriber's Exclusion_List.
+- **Subscriber_Row**: A row in the Subscriber_Sheet (row 2 onward) containing a recipient email address in column A, an optional comma-separated list of gauge numbers to include in column B, and an optional state code in column C.
+- **Header_Row**: Row 1 of the Subscriber_Sheet containing column headers ("Email" in column A, "Include Gauges" in column B, optionally "State" in column C).
+- **Inclusion_List**: A comma-separated list of gauge numbers in column B of a Subscriber_Row specifying which gauges the subscriber wants to receive. An empty list means receive all gauges.
+- **Email_Report**: A personalized HTML email containing gauge entries for the subscriber's state, filtered to only those in the subscriber's Inclusion_List (or all if the list is empty).
 - **Token_Generator**: A standalone utility that performs the Gmail OAuth2 consent flow and persists the resulting token locally.
 - **Scheduler**: The component responsible for triggering the Notification_System at a configured daily time.
 - **Gmail_Service**: The Gmail API used to send emails via OAuth2 authentication.
@@ -27,11 +27,11 @@ The River Level Notification System retrieves real-time river gauge data from th
 
 #### Acceptance Criteria
 
-1. WHEN the Notification_System executes its data retrieval step, THE Notification_System SHALL query the USGS_Data_Service via its structured REST API (not screen scraping) to obtain real-time river gauge data for ALL gauges in the configured state.
+1. WHEN the Notification_System executes its data retrieval step, THE Notification_System SHALL query the USGS_Data_Service via its structured REST API (not screen scraping) to obtain real-time river gauge data for ALL gauges in each unique state required by subscribers.
 2. THE Notification_System SHALL request data in a structured format (e.g., JSON) from the USGS Water Services API using the state code parameter (stateCd) to retrieve all gauges for that state.
-3. THE Notification_System SHALL support a configurable US state code (two-letter abbreviation) for filtering USGS data, defaulting to Oregon (OR) when no state is configured.
+3. THE Notification_System SHALL support a configurable default US state code (two-letter abbreviation) for filtering USGS data, defaulting to Oregon (OR) when no state is configured. Individual subscribers MAY override this default via the Subscriber_Sheet.
 4. FOR EACH gauge returned by the USGS_Data_Service, THE Notification_System SHALL extract the gauge name, the USGS page link, the latest date/time of reading, and the current flow level.
-5. IF the USGS_Data_Service is unreachable or returns an error, THEN THE Notification_System SHALL log the error and halt the current execution run.
+5. IF the USGS_Data_Service is unreachable or returns an error for any state, THEN THE Notification_System SHALL log the error and halt the current execution run.
 
 ### Requirement 2: Read Subscriber Preferences
 
@@ -40,22 +40,24 @@ The River Level Notification System retrieves real-time river gauge data from th
 #### Acceptance Criteria
 
 1. WHEN the Notification_System executes its subscriber reading step, THE Notification_System SHALL authenticate with the Google Sheets API using a service account credential file.
-2. THE Notification_System SHALL read the Header_Row (row 1) to confirm the expected column layout (email in column A, exclusion list in column B).
-3. THE Notification_System SHALL read each Subscriber_Row (row 2 onward) to obtain the recipient email address from column A and the optional Exclusion_List from column B.
+2. THE Notification_System SHALL read the Header_Row (row 1) to confirm the expected column layout (email in column A, inclusion list in column B, optionally state in column C).
+3. THE Notification_System SHALL read each Subscriber_Row (row 2 onward) to obtain the recipient email address from column A, the optional Inclusion_List from column B, and the optional state code from column C.
 4. WHEN a Subscriber_Row has an empty or blank email address in column A, THE Notification_System SHALL skip that row without error.
-5. WHEN a Subscriber_Row has an empty Exclusion_List in column B, THE Notification_System SHALL include ALL gauges from the configured state in that subscriber's report.
-6. WHEN a Subscriber_Row contains a comma-separated list of gauge numbers in column B, THE Notification_System SHALL exclude those gauges from that subscriber's report.
+5. WHEN a Subscriber_Row has an empty Inclusion_List in column B, THE Notification_System SHALL include ALL gauges from the subscriber's effective state in that subscriber's report.
+6. WHEN a Subscriber_Row contains a comma-separated list of gauge numbers in column B, THE Notification_System SHALL include ONLY those gauges in that subscriber's report.
+7. WHEN a Subscriber_Row has an empty state code in column C, THE Notification_System SHALL use the global default state code from configuration.
+8. WHEN a Subscriber_Row contains a state code in column C, THE Notification_System SHALL fetch gauge data for that specific state for that subscriber.
 
 ### Requirement 3: Build Personalized Email Reports
 
-**User Story:** As a subscriber, I want to receive an email containing all river gauges in my state except those I've opted out of, so that I see relevant information without clutter.
+**User Story:** As a subscriber, I want to receive an email containing the river gauges I care about, so that I see relevant information without clutter.
 
 #### Acceptance Criteria
 
-1. FOR EACH subscriber with a valid email address, THE Notification_System SHALL build an Email_Report containing all gauges retrieved from the USGS_Data_Service EXCEPT those listed in the subscriber's Exclusion_List.
+1. FOR EACH subscriber with a valid email address, THE Notification_System SHALL build an Email_Report containing gauges from the subscriber's effective state filtered by their Inclusion_List (all gauges if the list is empty, or only listed gauges if populated).
 2. FOR EACH gauge included in an Email_Report, THE Notification_System SHALL display: a clickable link to the USGS gauge page, the gauge name, the date/time of the reading, and the flow level.
 3. THE Notification_System SHALL format the Email_Report as HTML.
-4. WHEN a gauge number in the subscriber's Exclusion_List does not match any gauge returned by the USGS_Data_Service, THE Notification_System SHALL silently ignore that exclusion entry without generating an error.
+4. WHEN a gauge number in the subscriber's Inclusion_List does not match any gauge returned by the USGS_Data_Service, THE Notification_System SHALL silently ignore that inclusion entry without generating an error.
 5. THE Notification_System SHALL include the application version number in the footer of each Email_Report.
 
 ### Requirement 4: Send Emails via Gmail API
@@ -124,11 +126,11 @@ The River Level Notification System retrieves real-time river gauge data from th
 
 ### Requirement 10: Empty Report Suppression
 
-**User Story:** As a subscriber, I don't want to receive an empty email when all gauges in my state are in my exclusion list or no gauge data is available.
+**User Story:** As a subscriber, I don't want to receive an empty email when no gauges match my inclusion list or no gauge data is available.
 
 #### Acceptance Criteria
 
-1. WHEN all gauges returned by the USGS_Data_Service are in the subscriber's Exclusion_List (or no gauge data was returned), THE Notification_System SHALL NOT send an email to that subscriber for the current run.
+1. WHEN no gauges from the subscriber's effective state match their Inclusion_List (or no gauge data was returned), THE Notification_System SHALL NOT send an email to that subscriber for the current run.
 2. WHEN an email is suppressed due to an empty report, THE Notification_System SHALL log that the subscriber was skipped along with the reason.
 
 ### Requirement 11: Structured Logging and Run Summary

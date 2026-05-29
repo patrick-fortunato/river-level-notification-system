@@ -88,6 +88,7 @@ class ConfigValidator:
 
         Checks that the sheet can be opened and that the header row has
         'Email' in column A and 'Include Gauges' in column B.
+        Column C ('State') is optional.
 
         Returns:
             An error message string if the check fails, or None if it passes.

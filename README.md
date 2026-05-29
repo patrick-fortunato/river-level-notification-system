@@ -58,16 +58,20 @@ python river_notify.py --version
 
 ## Google Sheet Structure
 
-| Row | Col A (Email) | Col B (Include Gauges) |
-|-----|---------------|------------------------|
-| 1 (Header) | Email | Include Gauges |
-| 2+ (Subscribers) | user@email.com | 12484500, 12488500 |
-| 2+ (Subscribers) | user2@email.com | *(empty = receive all gauges)* |
+| Row | Col A (Email) | Col B (Include Gauges) | Col C (State) |
+|-----|---------------|------------------------|---------------|
+| 1 (Header) | Email | Include Gauges | State |
+| 2+ (Subscribers) | user@email.com | 12484500, 12488500 | OR |
+| 2+ (Subscribers) | user2@email.com | *(empty = receive all gauges)* | WA |
+| 2+ (Subscribers) | user3@email.com | 14321000 | *(empty = use default)* |
 
 - **Column A**: Subscriber email address
 - **Column B**: Optional comma-separated list of USGS gauge numbers to include
-  - If empty, the subscriber receives ALL gauges for the configured state
+  - If empty, the subscriber receives ALL gauges for their state
   - If populated, the subscriber receives ONLY those gauges listed
+- **Column C**: Optional two-letter US state code override
+  - If empty, uses the global default from config (default: OR)
+  - If populated, fetches gauges for that specific state
 
 ## Configuration
 

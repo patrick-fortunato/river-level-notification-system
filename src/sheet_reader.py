@@ -10,6 +10,7 @@ from src.models import Subscriber
 # Expected header labels (case-insensitive comparison)
 EXPECTED_HEADER_COL_A = "email"
 EXPECTED_HEADER_COL_B = "include gauges"
+EXPECTED_HEADER_COL_C = "state"
 
 # Google Sheets API scopes required for read-only access
 SCOPES = [
@@ -37,9 +38,11 @@ class SheetReader:
         """
         Read subscriber rows (row 2+) and return parsed Subscriber objects.
 
-        Each subscriber has an email (col A) and an optional comma-separated
-        inclusion list of gauge numbers (col B). Rows with empty/blank email
-        in column A are skipped. An empty inclusion list means receive all gauges.
+        Each subscriber has an email (col A), an optional comma-separated
+        inclusion list of gauge numbers (col B), and an optional state code
+        (col C). Rows with empty/blank email in column A are skipped.
+        An empty inclusion list means receive all gauges.
+        An empty state code means use the global default from config.
         """
         worksheet = self._get_worksheet()
         all_values = worksheet.get_all_values()
@@ -58,8 +61,15 @@ class SheetReader:
             inclusion_raw = row[1].strip() if len(row) > 1 else ""
             included_gauges = _parse_gauge_list(inclusion_raw)
 
+            # Parse state code from column C
+            state_code = row[2].strip().upper() if len(row) > 2 else ""
+
             subscribers.append(
-                Subscriber(email=email, included_gauges=included_gauges)
+                Subscriber(
+                    email=email,
+                    included_gauges=included_gauges,
+                    state_code=state_code,
+                )
             )
 
         return subscribers
@@ -67,6 +77,9 @@ class SheetReader:
     def validate_structure(self) -> bool:
         """
         Validate that the sheet is accessible and has the expected header row.
+
+        Requires at least columns A (Email) and B (Include Gauges).
+        Column C (State) is optional.
 
         Returns True if structure is valid, raises an exception otherwise.
         """
@@ -92,6 +105,15 @@ class SheetReader:
                 f"Column B header must be '{EXPECTED_HEADER_COL_B}', "
                 f"found '{header_row[1].strip()}'"
             )
+
+        # Column C (State) is optional but must match if present
+        if len(header_row) >= 3 and header_row[2].strip():
+            col_c = header_row[2].strip().lower()
+            if col_c != EXPECTED_HEADER_COL_C:
+                raise SheetStructureError(
+                    f"Column C header must be '{EXPECTED_HEADER_COL_C}', "
+                    f"found '{header_row[2].strip()}'"
+                )
 
         return True
 

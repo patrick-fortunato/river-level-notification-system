@@ -1,0 +1,20 @@
+[tool.semantic_release]
+version_toml = []
+version_variables = ["src/__version__.py:__version__"]
+branch = "main"
+commit_message = "chore(release): v{version}"
+build_command = ""
+
+[tool.semantic_release.commit_parser_options]
+# Commit message conventions:
+#   fix: <message>           → PATCH bump (bug fixes)
+#   feat: <message>          → MINOR bump (new features)
+#   BREAKING CHANGE: <text>  → MAJOR bump (in commit body/footer)
+#   feat!: <message>         → MAJOR bump (breaking change shorthand)
+allowed_tags = ["build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "style", "test"]
+minor_tags = ["feat"]
+patch_tags = ["fix", "perf"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

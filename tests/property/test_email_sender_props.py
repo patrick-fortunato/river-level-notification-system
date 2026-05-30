@@ -56,7 +56,7 @@ def test_all_subscribers_attempted_regardless_of_failures(outcomes: list[bool]):
 
     send_attempts: list[str] = []
 
-    def mock_send_email(recipient, html_body, state_code=None):
+    def mock_send_email(recipient, html_body, state_code=None, subject=None):
         send_attempts.append(recipient)
         idx = len(send_attempts) - 1
         return outcomes[idx] if idx < len(outcomes) else True

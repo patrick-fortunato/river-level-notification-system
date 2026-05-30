@@ -99,7 +99,7 @@ class EmailSender:
             if remaining > 0:
                 time.sleep(remaining)
 
-    def send_email(self, recipient: str, html_body: str, state_code: str | None = None) -> bool:
+    def send_email(self, recipient: str, html_body: str, state_code: str | None = None, subject: str | None = None) -> bool:
         """Send an HTML email to the recipient with retry logic.
 
         Constructs a MIME message, applies rate limiting, and sends via
@@ -112,6 +112,9 @@ class EmailSender:
             state_code: Optional two-letter state code to use for the email
                 subject. If provided, resolves the full state name from
                 STATE_NAMES. Otherwise falls back to the global config state.
+                Ignored if subject is provided.
+            subject: Optional explicit subject line. If provided, overrides
+                the state_code-based subject formatting.
 
         Returns:
             True on successful send, False on permanent failure.
@@ -120,19 +123,25 @@ class EmailSender:
             self._logger.log("ERROR", "Gmail service not authenticated. Call authenticate() first.")
             return False
 
-        # Resolve state name: use provided state_code if given, else global config
-        if state_code is not None:
-            resolved_state_name = STATE_NAMES.get(state_code, state_code)
+        # Determine subject line
+        if subject is not None:
+            resolved_subject = subject
         else:
-            resolved_state_name = self._config.state_name
+            # Resolve state name: use provided state_code if given, else global config
+            if state_code is not None:
+                resolved_state_name = STATE_NAMES.get(state_code, state_code)
+            else:
+                resolved_state_name = self._config.state_name
+
+            resolved_subject = self._config.email_subject.format(
+                state_name=resolved_state_name
+            )
 
         # Build the MIME message
         message = MIMEMultipart("alternative")
         message["To"] = recipient
         message["From"] = self._config.sender_email
-        message["Subject"] = self._config.email_subject.format(
-            state_name=resolved_state_name
-        )
+        message["Subject"] = resolved_subject
         message.attach(MIMEText(html_body, "html"))
 
         # Encode for Gmail API

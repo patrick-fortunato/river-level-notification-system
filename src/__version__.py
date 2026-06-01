@@ -6,4 +6,4 @@ Version follows Semantic Versioning (MAJOR.MINOR.PATCH):
 - MAJOR: breaking changes (commit body/footer: BREAKING CHANGE:)
 """
 
-__version__ = "0.2.0"
+__version__ = "1.0.0"

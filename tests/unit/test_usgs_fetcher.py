@@ -15,40 +15,6 @@ from src.config import Config
 from src.usgs_fetcher import USGSFetcher, USGSFetchError
 
 
-class TestBuildRequestUrl:
-    """Tests for URL construction."""
-
-    def test_url_contains_state_code(self):
-        config = Config(usgs_state_code="WA")
-        fetcher = USGSFetcher(config, requests.Session())
-        url = fetcher._build_request_url()
-        assert "stateCd=WA" in url
-
-    def test_url_contains_parameter_code(self):
-        config = Config(usgs_parameter_code="00060")
-        fetcher = USGSFetcher(config, requests.Session())
-        url = fetcher._build_request_url()
-        assert "parameterCd=00060" in url
-
-    def test_url_contains_json_format(self):
-        config = Config(usgs_format="json")
-        fetcher = USGSFetcher(config, requests.Session())
-        url = fetcher._build_request_url()
-        assert "format=json" in url
-
-    def test_url_uses_configured_base_url(self):
-        config = Config(usgs_base_url="https://example.com/api/")
-        fetcher = USGSFetcher(config, requests.Session())
-        url = fetcher._build_request_url()
-        assert url.startswith("https://example.com/api/")
-
-    def test_default_state_is_oregon(self):
-        config = Config()
-        fetcher = USGSFetcher(config, requests.Session())
-        url = fetcher._build_request_url()
-        assert "stateCd=OR" in url
-
-
 class TestParseResponse:
     """Tests for USGS JSON response parsing."""
 
@@ -166,12 +132,99 @@ class TestParseResponse:
         assert result["11111"].reading_datetime == "2025-01-15T08:00:00"
 
 
-class TestFetchAllStateGauges:
-    """Tests for the full fetch flow with error handling."""
+class TestFetchGaugesByIds:
+    """Tests for the fetch_gauges_by_ids method."""
+
+    def test_empty_list_returns_empty_dict(self):
+        config = Config()
+        fetcher = USGSFetcher(config, requests.Session())
+        result = fetcher.fetch_gauges_by_ids([])
+        assert result == {}
 
     @responses.activate
-    def test_4xx_raises_usgs_fetch_error(self):
-        config = Config(usgs_state_code="XX")
+    def test_builds_url_with_sites_parameter(self):
+        config = Config()
+        session = requests.Session()
+        fetcher = USGSFetcher(config, session)
+
+        json_response = {"value": {"timeSeries": []}}
+
+        responses.add(
+            responses.GET,
+            config.usgs_base_url,
+            json=json_response,
+            status=200,
+        )
+
+        fetcher.fetch_gauges_by_ids(["14209500", "14211720"])
+
+        # Verify the request URL contains sites= parameter
+        assert len(responses.calls) == 1
+        request_url = responses.calls[0].request.url
+        assert "sites=14209500%2C14211720" in request_url or "sites=14209500,14211720" in request_url
+        assert "parameterCd=00060" in request_url
+        assert "format=json" in request_url
+        # Should NOT contain stateCd
+        assert "stateCd" not in request_url
+
+    @responses.activate
+    def test_successful_fetch_returns_gauge_data(self):
+        config = Config()
+        session = requests.Session()
+        fetcher = USGSFetcher(config, session)
+
+        json_response = {
+            "value": {
+                "timeSeries": [
+                    {
+                        "sourceInfo": {
+                            "siteName": "CLACKAMAS RIVER AT ESTACADA, OR",
+                            "siteCode": [{"value": "14209500"}],
+                        },
+                        "values": [
+                            {
+                                "value": [
+                                    {"value": "1500", "dateTime": "2025-01-15T08:00:00.000-08:00"}
+                                ]
+                            }
+                        ],
+                    },
+                    {
+                        "sourceInfo": {
+                            "siteName": "WILLAMETTE RIVER AT PORTLAND, OR",
+                            "siteCode": [{"value": "14211720"}],
+                        },
+                        "values": [
+                            {
+                                "value": [
+                                    {"value": "12500", "dateTime": "2025-01-15T09:00:00.000-08:00"}
+                                ]
+                            }
+                        ],
+                    },
+                ]
+            }
+        }
+
+        responses.add(
+            responses.GET,
+            config.usgs_base_url,
+            json=json_response,
+            status=200,
+        )
+
+        result = fetcher.fetch_gauges_by_ids(["14209500", "14211720"])
+        assert len(result) == 2
+        assert "14209500" in result
+        assert "14211720" in result
+        assert result["14209500"].gauge_name == "CLACKAMAS RIVER AT ESTACADA, OR"
+        assert result["14209500"].flow_level == "1500"
+        assert result["14211720"].gauge_name == "WILLAMETTE RIVER AT PORTLAND, OR"
+        assert result["14211720"].flow_level == "12500"
+
+    @responses.activate
+    def test_4xx_error_returns_empty_dict_does_not_raise(self):
+        config = Config()
         session = requests.Session()
         fetcher = USGSFetcher(config, session)
 
@@ -182,13 +235,13 @@ class TestFetchAllStateGauges:
             body="Bad Request",
         )
 
-        with pytest.raises(USGSFetchError, match="client error 400"):
-            fetcher.fetch_all_state_gauges()
+        # Should NOT raise — returns empty dict gracefully
+        result = fetcher.fetch_gauges_by_ids(["99999999"])
+        assert result == {}
 
     @responses.activate
-    def test_5xx_retries_and_raises_on_exhaustion(self):
+    def test_5xx_retries_and_returns_empty_on_exhaustion(self):
         config = Config(
-            usgs_state_code="OR",
             max_retries=2,
             initial_backoff_seconds=0.001,
             backoff_multiplier=1.5,
@@ -206,12 +259,13 @@ class TestFetchAllStateGauges:
             )
 
         with patch("src.retry.time.sleep"):
-            with pytest.raises(USGSFetchError, match="Failed to fetch"):
-                fetcher.fetch_all_state_gauges()
+            # Should NOT raise — returns empty dict gracefully
+            result = fetcher.fetch_gauges_by_ids(["14209500"])
+            assert result == {}
 
     @responses.activate
-    def test_successful_fetch_returns_gauge_data(self):
-        config = Config(usgs_state_code="OR")
+    def test_single_gauge_id(self):
+        config = Config()
         session = requests.Session()
         fetcher = USGSFetcher(config, session)
 
@@ -220,13 +274,13 @@ class TestFetchAllStateGauges:
                 "timeSeries": [
                     {
                         "sourceInfo": {
-                            "siteName": "WILLAMETTE RIVER AT PORTLAND, OR",
-                            "siteCode": [{"value": "14211720"}],
+                            "siteName": "TEST RIVER",
+                            "siteCode": [{"value": "12345678"}],
                         },
                         "values": [
                             {
                                 "value": [
-                                    {"value": "12500", "dateTime": "2025-01-15T08:00:00.000-08:00"}
+                                    {"value": "800", "dateTime": "2025-01-15T10:00:00.000-08:00"}
                                 ]
                             }
                         ],
@@ -242,7 +296,30 @@ class TestFetchAllStateGauges:
             status=200,
         )
 
-        result = fetcher.fetch_all_state_gauges()
-        assert "14211720" in result
-        assert result["14211720"].gauge_name == "WILLAMETTE RIVER AT PORTLAND, OR"
-        assert result["14211720"].flow_level == "12500"
+        result = fetcher.fetch_gauges_by_ids(["12345678"])
+        assert len(result) == 1
+        assert result["12345678"].flow_level == "800"
+
+    @responses.activate
+    def test_connection_error_returns_empty_dict(self):
+        config = Config(
+            max_retries=1,
+            initial_backoff_seconds=0.001,
+        )
+        session = requests.Session()
+        fetcher = USGSFetcher(config, session)
+
+        responses.add(
+            responses.GET,
+            config.usgs_base_url,
+            body=requests.exceptions.ConnectionError("Connection refused"),
+        )
+        responses.add(
+            responses.GET,
+            config.usgs_base_url,
+            body=requests.exceptions.ConnectionError("Connection refused"),
+        )
+
+        with patch("src.retry.time.sleep"):
+            result = fetcher.fetch_gauges_by_ids(["14209500"])
+            assert result == {}

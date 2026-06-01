@@ -44,7 +44,7 @@ def _make_gauge_data_for_state(state_code: str) -> dict[str, GaugeEntry]:
         gauge_number: GaugeEntry(
             gauge_number=gauge_number,
             gauge_name=f"RIVER AT CITY ({state_code})",
-            usgs_page_url=f"https://waterdata.usgs.gov/nwis/uv?site_no={gauge_number}",
+            usgs_page_url=f"https://waterdata.usgs.gov/monitoring-location/USGS-{gauge_number}/#period=P7D&dataTypeId=continuous-00060-0&showMedian=true&showFieldMeasurements=true",
             reading_datetime="2025-01-15T08:00:00",
             flow_level="1500",
         ),

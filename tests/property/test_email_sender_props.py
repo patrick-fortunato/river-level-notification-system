@@ -48,7 +48,7 @@ def test_all_subscribers_attempted_regardless_of_failures(outcomes: list[bool]):
         "12345": GaugeEntry(
             gauge_number="12345",
             gauge_name="Test River",
-            usgs_page_url="https://waterdata.usgs.gov/nwis/uv?site_no=12345",
+            usgs_page_url="https://waterdata.usgs.gov/monitoring-location/USGS-12345/#period=P7D&dataTypeId=continuous-00060-0&showMedian=true&showFieldMeasurements=true",
             reading_datetime="2025-01-15T08:00:00",
             flow_level="500",
         )

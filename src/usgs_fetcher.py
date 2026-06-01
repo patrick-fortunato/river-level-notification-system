@@ -75,7 +75,8 @@ class USGSFetcher:
                     continue
 
                 usgs_page_url = (
-                    f"https://waterdata.usgs.gov/nwis/uv?site_no={gauge_number}"
+                    f"https://waterdata.usgs.gov/monitoring-location/USGS-{gauge_number}/"
+                    f"#period=P7D&dataTypeId=continuous-00060-0&showMedian=true&showFieldMeasurements=true"
                 )
 
                 # Get the most recent reading from the values array

@@ -36,7 +36,8 @@ gauge_entry_strategy = st.builds(
         max_size=40,
     ),
     usgs_page_url=gauge_number_strategy.map(
-        lambda n: f"https://waterdata.usgs.gov/nwis/uv?site_no={n}"
+        lambda n: f"https://waterdata.usgs.gov/monitoring-location/USGS-{n}/"
+        f"#period=P7D&dataTypeId=continuous-00060-0&showMedian=true&showFieldMeasurements=true"
     ),
     reading_datetime=st.from_regex(
         r"2025-0[1-9]-[012][1-9]T[01][0-9]:[0-5][0-9]:00",

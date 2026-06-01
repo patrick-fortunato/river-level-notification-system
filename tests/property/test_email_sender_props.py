@@ -13,8 +13,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from src.config import Config
-from src.logger import PipelineLogger
-from src.models import GaugeEntry, Subscriber
+from src.models import GaugeEntry, ReachSubscriber, ResolvedReach
 from src.pipeline import Pipeline
 
 
@@ -37,18 +36,23 @@ def test_all_subscribers_attempted_regardless_of_failures(outcomes: list[bool]):
         email_delay_seconds=0,
     )
 
-    # Create subscribers (one per outcome)
+    # Create subscribers (one per outcome) — each subscribes to reach 1001
     subscribers = [
-        Subscriber(email=f"user{i}@example.com", included_gauges=[])
+        ReachSubscriber(email=f"user{i}@example.com", reach_ids=[1001])
         for i in range(len(outcomes))
     ]
+
+    # Resolved reaches so reports are non-empty
+    resolved_reaches = {
+        1001: ResolvedReach(reach_id=1001, reach_name="Test River", gauge_id="12345")
+    }
 
     # Create gauge data so reports are non-empty
     gauge_data = {
         "12345": GaugeEntry(
             gauge_number="12345",
             gauge_name="Test River",
-            usgs_page_url="https://waterdata.usgs.gov/monitoring-location/USGS-12345/#period=P7D&dataTypeId=continuous-00060-0&showMedian=true&showFieldMeasurements=true",
+            usgs_page_url="https://waterdata.usgs.gov/monitoring-location/USGS-12345/",
             reading_datetime="2025-01-15T08:00:00",
             flow_level="500",
         )
@@ -56,7 +60,7 @@ def test_all_subscribers_attempted_regardless_of_failures(outcomes: list[bool]):
 
     send_attempts: list[str] = []
 
-    def mock_send_email(recipient, html_body, state_code=None, subject=None):
+    def mock_send_email(recipient, html_body, subject=None):
         send_attempts.append(recipient)
         idx = len(send_attempts) - 1
         return outcomes[idx] if idx < len(outcomes) else True
@@ -65,16 +69,21 @@ def test_all_subscribers_attempted_regardless_of_failures(outcomes: list[bool]):
     with patch("src.pipeline.ConfigValidator") as mock_validator, \
          patch("src.pipeline.USGSFetcher") as mock_fetcher_cls, \
          patch("src.pipeline.SheetReader") as mock_reader_cls, \
-         patch("src.pipeline.EmailSender") as mock_sender_cls:
+         patch("src.pipeline.EmailSender") as mock_sender_cls, \
+         patch("src.pipeline.ReachResolver") as mock_resolver_cls, \
+         patch("src.pipeline.ReachCache"):
 
         # Validator passes
         mock_validator.return_value.validate_all.return_value = []
 
-        # USGS returns gauge data
-        mock_fetcher_cls.return_value.fetch_all_state_gauges.return_value = gauge_data
-
         # Sheet reader returns subscribers
         mock_reader_cls.return_value.get_subscribers.return_value = subscribers
+
+        # ReachResolver returns resolved reaches
+        mock_resolver_cls.return_value.resolve_reaches.return_value = resolved_reaches
+
+        # USGS fetcher returns gauge data
+        mock_fetcher_cls.return_value.fetch_gauges_by_ids.return_value = gauge_data
 
         # Email sender
         mock_sender = MagicMock()

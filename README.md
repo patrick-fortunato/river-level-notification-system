@@ -1,18 +1,19 @@
 # River Level Notification System
 
-Automated daily river level reports delivered to your inbox. The system fetches real-time gauge data from the USGS Water Services API, reads subscriber preferences from a Google Sheet, and sends personalized HTML emails via Gmail.
+Automated daily river level reports delivered to your inbox. Subscribers enter [American Whitewater](https://www.americanwhitewater.org/) reach IDs in a Google Sheet, and the system resolves each reach to its name and associated USGS gauge via the AW API, fetches real-time flow data, and sends personalized HTML emails organized by reach.
 
 ## Features
 
-- **USGS REST API integration** — structured JSON data, no browser or scraping required
-- **Configurable state** — works with any US state (default: Oregon)
+- **Reach-first subscriptions** — subscribe by AW reach ID; the system resolves gauge associations automatically
+- **American Whitewater integration** — reach names, AW page links, and gauge lookups via the AW GraphQL API
+- **USGS REST API integration** — structured JSON flow data, no browser or scraping required
 - **Google Sheet subscriber management** — add/remove subscribers without code changes
-- **Personalized reports** — each subscriber only sees the gauges they opted into
+- **Per-reach email reports** — each subscriber sees their reaches in the order they specified, with flow data and links
 - **Gmail API delivery** — OAuth2 with automatic token refresh
-- **Resilient** — retry with exponential backoff, rate limiting, empty report suppression
+- **Resilient** — retry with exponential backoff, rate limiting, per-reach error isolation
 - **Observable** — structured logging with run summaries
 - **Scheduled** — runs daily at a configurable time (default 6:00 AM)
-- **Versioned** — semantic versioning with auto-increment
+- **Cached** — reach-to-gauge mappings cached locally with 7-day TTL to minimize AW API calls
 
 ## Quick Start
 
@@ -58,20 +59,17 @@ python river_notify.py --version
 
 ## Google Sheet Structure
 
-| Row | Col A (Email) | Col B (Include Gauges) | Col C (State) |
-|-----|---------------|------------------------|---------------|
-| 1 (Header) | Email | Include Gauges | State |
-| 2+ (Subscribers) | user@email.com | 12484500, 12488500 | OR |
-| 2+ (Subscribers) | user2@email.com | *(empty = receive all gauges)* | WA |
-| 2+ (Subscribers) | user3@email.com | 14321000 | *(empty = use default)* |
+| Col A (Email) | Col B (Reach IDs) |
+|---------------|-------------------|
+| Email | Reach IDs |
+| user@email.com | 1493, 2001, 4521 |
+| user2@email.com | 305, 1493 |
 
 - **Column A**: Subscriber email address
-- **Column B**: Optional comma-separated list of USGS gauge numbers to include
-  - If empty, the subscriber receives ALL gauges for their state
-  - If populated, the subscriber receives ONLY those gauges listed
-- **Column C**: Optional two-letter US state code override
-  - If empty, uses the global default from config (default: OR)
-  - If populated, fetches gauges for that specific state
+- **Column B**: Comma-separated list of American Whitewater reach IDs
+  - Find reach IDs on the [AW website](https://www.americanwhitewater.org/) (the number in the river detail URL)
+  - Duplicates are automatically removed (first occurrence kept)
+  - Non-integer values are skipped with a logged warning
 
 ## Configuration
 
@@ -79,11 +77,13 @@ Key settings in `src/config.py`:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `usgs_state_code` | `"OR"` | Two-letter US state abbreviation |
 | `schedule_time` | `"06:00"` | Daily run time (HH:MM, local) |
 | `max_retries` | `3` | Retry attempts for transient failures |
 | `email_delay_seconds` | `1.0` | Delay between email sends |
-| `email_subject` | `"Current {state_name} River Levels"` | Subject line template |
+| `email_subject` | `"Current River Levels"` | Email subject line |
+| `aw_graphql_url` | `"https://www.americanwhitewater.org/graphql"` | AW GraphQL API endpoint |
+| `aw_reach_cache_file` | `"aw_reach_cache.json"` | Local cache file for reach-to-gauge mappings |
+| `aw_cache_ttl_seconds` | `604800` | Cache TTL in seconds (7 days) |
 
 ## Project Structure
 
@@ -91,16 +91,20 @@ Key settings in `src/config.py`:
 ├── river_notify.py          # Main entry point
 ├── src/
 │   ├── __init__.py
-│   ├── __version__.py       # Semantic version (single source of truth)
+│   ├── __version__.py       # Semantic version (1.0.0)
 │   ├── config.py            # Configuration dataclass
+│   ├── models.py            # Data models (ReachSubscriber, ResolvedReach, etc.)
 │   ├── usgs_fetcher.py      # USGS API integration
-│   ├── sheet_reader.py      # Google Sheets reader
-│   ├── report_builder.py    # HTML email report builder
+│   ├── sheet_reader.py      # Google Sheets reader (Email + Reach IDs)
+│   ├── reach_resolver.py    # AW API reach resolution (reach ID → name + gauge)
+│   ├── reach_cache.py       # Per-reach cache with TTL (JSON file)
+│   ├── report_builder.py    # HTML email report builder (reach-first layout)
 │   ├── email_sender.py      # Gmail API sender
+│   ├── pipeline.py          # Pipeline orchestrator
 │   ├── retry.py             # Retry with exponential backoff
 │   ├── validator.py         # Startup configuration validator
 │   ├── logger.py            # Structured logging
-│   ├── pipeline.py          # Pipeline orchestrator
+│   ├── aw_client.py         # American Whitewater API client
 │   ├── scheduler.py         # Daily scheduler
 │   └── create_token.py      # One-time OAuth token generator
 ├── tests/
@@ -125,10 +129,11 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/) f
 - **Never commit** `service_account.json`, `gmail_credentials.json`, or `token.json`
 - All three are listed in `.gitignore`
 - Credentials are loaded from external files at runtime
+- `aw_reach_cache.json` is auto-generated and contains no secrets (listed in `.gitignore`)
 
 ## Who This Is For
 
-Whitewater kayakers, rafters, anglers, hydrology enthusiasts, and anyone who wants automated river level notifications based on their personal list of favorite gauges.
+Whitewater kayakers, rafters, and paddlers who want automated river level notifications for their favorite reaches. Enter your American Whitewater reach IDs in the spreadsheet and get daily flow reports — no need to look up USGS gauge numbers or configure state codes.
 
 ## License
 

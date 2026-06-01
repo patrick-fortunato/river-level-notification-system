@@ -1,6 +1,6 @@
 """Data models for the River Level Notification System."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 
@@ -16,28 +16,36 @@ class GaugeEntry:
 
 
 @dataclass
-class Subscriber:
-    """A subscriber with their gauge inclusion preferences."""
+class ReachSubscriber:
+    """A subscriber with their ordered list of reach IDs."""
 
     email: str
-    included_gauges: list[str] = field(default_factory=list)
-    state_code: str = ""  # Empty = use global default from config
+    reach_ids: list[int]  # Ordered, deduplicated
 
 
 @dataclass
-class StatePreference:
-    """Gauge preferences for a single state within a grouped subscriber."""
+class ResolvedReach:
+    """A reach resolved from the AW API."""
 
-    state_code: str
-    included_gauges: list[str] = field(default_factory=list)  # Empty = all gauges
+    reach_id: int
+    reach_name: str
+    gauge_id: str | None  # USGS gauge number, or None if no USGS gauge
+    state: str | None = None  # US state abbreviation (e.g., "OR", "WA")
+
+    @property
+    def aw_url(self) -> str:
+        return (
+            f"https://www.americanwhitewater.org/content/River/view/"
+            f"river-detail/{self.reach_id}/main"
+        )
 
 
 @dataclass
-class GroupedSubscriber:
-    """A subscriber with consolidated preferences from all their sheet rows."""
+class Reach:
+    """A reach from the AW API (used by AWClient inverted mapping)."""
 
-    email: str
-    state_preferences: list[StatePreference] = field(default_factory=list)
+    reach_id: int
+    reach_name: str
 
 
 @dataclass

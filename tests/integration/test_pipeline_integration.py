@@ -37,14 +37,14 @@ def _make_gauge_data() -> dict[str, GaugeEntry]:
         "12345": GaugeEntry(
             gauge_number="12345",
             gauge_name="RIVER A AT CITY",
-            usgs_page_url="https://waterdata.usgs.gov/nwis/uv?site_no=12345",
+            usgs_page_url="https://waterdata.usgs.gov/monitoring-location/USGS-12345/#period=P7D&dataTypeId=continuous-00060-0&showMedian=true&showFieldMeasurements=true",
             reading_datetime="2025-01-15T08:00:00",
             flow_level="1500",
         ),
         "67890": GaugeEntry(
             gauge_number="67890",
             gauge_name="RIVER B AT TOWN",
-            usgs_page_url="https://waterdata.usgs.gov/nwis/uv?site_no=67890",
+            usgs_page_url="https://waterdata.usgs.gov/monitoring-location/USGS-67890/#period=P7D&dataTypeId=continuous-00060-0&showMedian=true&showFieldMeasurements=true",
             reading_datetime="2025-01-15T09:00:00",
             flow_level="800",
         ),
@@ -231,7 +231,7 @@ class TestPipelineIntegration:
             "12345": GaugeEntry(
                 gauge_number="12345",
                 gauge_name="RIVER A AT PORTLAND",
-                usgs_page_url="https://waterdata.usgs.gov/nwis/uv?site_no=12345",
+                usgs_page_url="https://waterdata.usgs.gov/monitoring-location/USGS-12345/#period=P7D&dataTypeId=continuous-00060-0&showMedian=true&showFieldMeasurements=true",
                 reading_datetime="2025-01-15T08:00:00",
                 flow_level="1500",
             ),
@@ -240,7 +240,7 @@ class TestPipelineIntegration:
             "99999": GaugeEntry(
                 gauge_number="99999",
                 gauge_name="RIVER C AT SEATTLE",
-                usgs_page_url="https://waterdata.usgs.gov/nwis/uv?site_no=99999",
+                usgs_page_url="https://waterdata.usgs.gov/monitoring-location/USGS-99999/#period=P7D&dataTypeId=continuous-00060-0&showMedian=true&showFieldMeasurements=true",
                 reading_datetime="2025-01-15T10:00:00",
                 flow_level="2000",
             ),

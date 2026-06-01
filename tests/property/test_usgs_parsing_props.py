@@ -94,7 +94,7 @@ def test_parsing_extracts_all_required_fields(json_data: dict):
         assert entry.reading_datetime != ""
         assert entry.flow_level != ""
         assert gauge_number == entry.gauge_number
-        assert f"site_no={gauge_number}" in entry.usgs_page_url
+        assert f"USGS-{gauge_number}" in entry.usgs_page_url
 
 
 @settings(max_examples=100)
@@ -108,5 +108,8 @@ def test_parsing_produces_correct_url_format(json_data: dict):
     result = fetcher._parse_response(json_data)
 
     for gauge_number, entry in result.items():
-        expected_url = f"https://waterdata.usgs.gov/nwis/uv?site_no={gauge_number}"
+        expected_url = (
+            f"https://waterdata.usgs.gov/monitoring-location/USGS-{gauge_number}/"
+            f"#period=P7D&dataTypeId=continuous-00060-0&showMedian=true&showFieldMeasurements=true"
+        )
         assert entry.usgs_page_url == expected_url

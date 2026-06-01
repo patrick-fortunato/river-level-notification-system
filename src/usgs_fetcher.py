@@ -1,10 +1,13 @@
 """USGS Water Services data fetcher for the River Level Notification System."""
 
+import logging
 import requests
 
 from src.config import Config
 from src.models import GaugeEntry
 from src.retry import retry_with_backoff
+
+logger = logging.getLogger(__name__)
 
 
 class USGSFetchError(Exception):
@@ -162,3 +165,71 @@ class USGSFetcher:
                 f"Failed to fetch USGS data after {self._config.max_retries} "
                 f"retries: {exc}"
             ) from exc
+
+    def fetch_gauges_by_ids(self, gauge_ids: list[str]) -> dict[str, GaugeEntry]:
+        """Fetch current readings for specific gauge IDs.
+
+        Uses USGS API with sites= parameter instead of stateCd=.
+        Returns mapping of gauge_number -> GaugeEntry.
+        Skips gauges that return errors (does not halt pipeline).
+
+        Args:
+            gauge_ids: List of USGS gauge number strings to fetch.
+
+        Returns:
+            A dict mapping gauge_number -> GaugeEntry for all successfully
+            fetched gauges.
+        """
+        if not gauge_ids:
+            return {}
+
+        sites_param = ",".join(gauge_ids)
+        url = (
+            f"{self._config.usgs_base_url}"
+            f"?sites={sites_param}"
+            f"&parameterCd={self._config.usgs_parameter_code}"
+            f"&format={self._config.usgs_format}"
+        )
+
+        def _make_request() -> dict[str, GaugeEntry]:
+            response = self._http_client.get(url, timeout=30)
+
+            # Permanent client errors should not be retried
+            if 400 <= response.status_code < 500:
+                raise USGSFetchError(
+                    f"USGS API returned client error {response.status_code}: "
+                    f"{response.text[:200]}"
+                )
+
+            # Server errors are retryable — raise to trigger retry
+            response.raise_for_status()
+
+            json_data = response.json()
+            return self._parse_response(json_data)
+
+        try:
+            return retry_with_backoff(
+                operation=_make_request,
+                max_retries=self._config.max_retries,
+                initial_backoff=self._config.initial_backoff_seconds,
+                multiplier=self._config.backoff_multiplier,
+                retryable_exceptions=(
+                    requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout,
+                    requests.exceptions.HTTPError,
+                ),
+            )
+        except USGSFetchError:
+            # Log and return empty — do not halt pipeline
+            logger.error(
+                "USGS API returned a permanent error for gauges %s", sites_param
+            )
+            return {}
+        except Exception as exc:
+            logger.error(
+                "Failed to fetch USGS data for gauges %s after %d retries: %s",
+                sites_param,
+                self._config.max_retries,
+                exc,
+            )
+            return {}

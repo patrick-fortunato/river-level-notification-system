@@ -26,6 +26,9 @@ build/
 .DS_Store
 Thumbs.db
 
+# Auto-generated cache
+aw_reach_cache.json
+
 # Testing
 .pytest_cache/
 .coverage

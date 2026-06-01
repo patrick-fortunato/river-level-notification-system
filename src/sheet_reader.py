@@ -1,16 +1,18 @@
-"""Google Sheet reader for subscriber preferences."""
+"""Google Sheet reader for subscriber reach ID preferences."""
+
+import logging
 
 import gspread
 from google.oauth2.service_account import Credentials
 
 from src.config import Config
-from src.models import Subscriber
+from src.models import ReachSubscriber
 
+logger = logging.getLogger(__name__)
 
 # Expected header labels (case-insensitive comparison)
 EXPECTED_HEADER_COL_A = "email"
-EXPECTED_HEADER_COL_B = "include gauges"
-EXPECTED_HEADER_COL_C = "state"
+EXPECTED_HEADER_COL_B = "reach ids"
 
 # Google Sheets API scopes required for read-only access
 SCOPES = [
@@ -20,7 +22,7 @@ SCOPES = [
 
 
 class SheetReader:
-    """Reads subscriber emails and inclusion lists from a Google Sheet."""
+    """Reads subscriber emails and reach IDs from a Google Sheet."""
 
     def __init__(self, config: Config):
         self._config = config
@@ -34,54 +36,58 @@ class SheetReader:
         )
         self._client = gspread.authorize(credentials)
 
-    def get_subscribers(self) -> list[Subscriber]:
-        """
-        Read subscriber rows (row 2+) and return parsed Subscriber objects.
+    def get_subscribers(self) -> list[ReachSubscriber]:
+        """Parse spreadsheet rows into ReachSubscriber objects.
 
-        Each subscriber has an email (col A), an optional comma-separated
-        inclusion list of gauge numbers (col B), and an optional state code
-        (col C). Rows with empty/blank email in column A are skipped.
-        An empty inclusion list means receive all gauges.
-        An empty state code means use the global default from config.
+        - Skips rows with blank email
+        - Skips rows with empty Reach IDs (logs warning)
+        - Parses comma-separated integers from column B
+        - Skips non-integer values (logs warning)
+        - Deduplicates reach IDs preserving first-occurrence order
         """
         worksheet = self._get_worksheet()
         all_values = worksheet.get_all_values()
 
-        subscribers: list[Subscriber] = []
+        subscribers: list[ReachSubscriber] = []
 
         # Skip header row (index 0), process data rows (index 1+)
         for row in all_values[1:]:
             email = row[0].strip() if len(row) > 0 else ""
 
-            # Skip rows with empty/blank email
+            # Skip rows with blank email (column A)
             if not email:
                 continue
 
-            # Parse inclusion list from column B
-            inclusion_raw = row[1].strip() if len(row) > 1 else ""
-            included_gauges = _parse_gauge_list(inclusion_raw)
+            # Get reach IDs raw value from column B
+            reach_ids_raw = row[1].strip() if len(row) > 1 else ""
 
-            # Parse state code from column C
-            state_code = row[2].strip().upper() if len(row) > 2 else ""
+            # Skip rows with empty Reach IDs column (log warning)
+            if not reach_ids_raw:
+                logger.warning(
+                    "Skipping subscriber '%s': empty Reach IDs column", email
+                )
+                continue
+
+            # Parse comma-separated integers with whitespace trimming
+            reach_ids = _parse_reach_ids(reach_ids_raw, email)
+
+            # If no valid reach IDs were parsed, skip the subscriber
+            if not reach_ids:
+                logger.warning(
+                    "Skipping subscriber '%s': no valid reach IDs found", email
+                )
+                continue
 
             subscribers.append(
-                Subscriber(
-                    email=email,
-                    included_gauges=included_gauges,
-                    state_code=state_code,
-                )
+                ReachSubscriber(email=email, reach_ids=reach_ids)
             )
 
         return subscribers
 
     def validate_structure(self) -> bool:
-        """
-        Validate that the sheet is accessible and has the expected header row.
+        """Validate header row: 'Email' (A), 'Reach IDs' (B).
 
-        Requires at least columns A (Email) and B (Include Gauges).
-        Column C (State) is optional.
-
-        Returns True if structure is valid, raises an exception otherwise.
+        Returns True if structure is valid, raises SheetStructureError otherwise.
         """
         worksheet = self._get_worksheet()
         header_row = worksheet.row_values(1)
@@ -106,15 +112,6 @@ class SheetReader:
                 f"found '{header_row[1].strip()}'"
             )
 
-        # Column C (State) is optional but must match if present
-        if len(header_row) >= 3 and header_row[2].strip():
-            col_c = header_row[2].strip().lower()
-            if col_c != EXPECTED_HEADER_COL_C:
-                raise SheetStructureError(
-                    f"Column C header must be '{EXPECTED_HEADER_COL_C}', "
-                    f"found '{header_row[2].strip()}'"
-                )
-
         return True
 
     def _get_worksheet(self) -> gspread.Worksheet:
@@ -136,19 +133,33 @@ class SheetStructureError(Exception):
     pass
 
 
-def _parse_gauge_list(raw_value: str) -> list[str]:
-    """
-    Parse a comma-separated string of gauge numbers into a list.
+def _parse_reach_ids(raw_value: str, email: str) -> list[int]:
+    """Parse a comma-separated string of reach IDs into a deduplicated list.
 
-    Empty/blank input returns an empty list (meaning receive all gauges).
-    Whitespace around each gauge number is stripped. Empty entries from
-    consecutive commas are ignored.
+    - Splits on commas and trims whitespace from each token
+    - Skips non-integer values (logs warning with email context)
+    - Deduplicates preserving first-occurrence order
     """
-    if not raw_value:
-        return []
+    reach_ids: list[int] = []
+    seen: set[int] = set()
 
-    return [
-        gauge.strip()
-        for gauge in raw_value.split(",")
-        if gauge.strip()
-    ]
+    for token in raw_value.split(","):
+        token = token.strip()
+        if not token:
+            continue
+
+        try:
+            reach_id = int(token)
+        except ValueError:
+            logger.warning(
+                "Skipping invalid reach ID '%s' for subscriber '%s'",
+                token,
+                email,
+            )
+            continue
+
+        if reach_id not in seen:
+            seen.add(reach_id)
+            reach_ids.append(reach_id)
+
+    return reach_ids

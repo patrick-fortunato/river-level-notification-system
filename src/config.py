@@ -35,8 +35,7 @@ class Config:
 
     # Email
     sender_email: str = "fortunatopt@gmail.com"
-    email_subject: str = "Current {state_name} River Levels"
-    consolidated_email_subject: str = "Current River Levels"
+    email_subject: str = "Current River Levels"
 
     # Scheduler
     schedule_time: str = "06:00"
@@ -53,9 +52,11 @@ class Config:
     usgs_base_url: str = "https://waterservices.usgs.gov/nwis/iv/"
     usgs_format: str = "json"
     usgs_parameter_code: str = "00060"  # Discharge (cubic feet/sec)
-    usgs_state_code: str = "OR"  # Two-letter US state abbreviation
+    # AW API
+    aw_graphql_url: str = "https://www.americanwhitewater.org/graphql"
+    aw_reach_cache_file: str = "aw_reach_cache.json"
+    aw_cache_ttl_seconds: int = 604800  # 7 days
+    aw_request_timeout: int = 30
+    aw_request_delay: float = 0.5
 
-    @property
-    def state_name(self) -> str:
-        """Return the full state name for the configured state code."""
-        return STATE_NAMES.get(self.usgs_state_code, self.usgs_state_code)
+

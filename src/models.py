@@ -25,6 +25,22 @@ class Subscriber:
 
 
 @dataclass
+class StatePreference:
+    """Gauge preferences for a single state within a grouped subscriber."""
+
+    state_code: str
+    included_gauges: list[str] = field(default_factory=list)  # Empty = all gauges
+
+
+@dataclass
+class GroupedSubscriber:
+    """A subscriber with consolidated preferences from all their sheet rows."""
+
+    email: str
+    state_preferences: list[StatePreference] = field(default_factory=list)
+
+
+@dataclass
 class RunSummary:
     """Summary of a pipeline execution run."""
 

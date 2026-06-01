@@ -5,16 +5,16 @@ per unique state across subscribers, read subscribers, build and send
 personalized reports, and output a run summary.
 """
 
-from collections import defaultdict
 from datetime import datetime, timezone
 
 import requests
 
 from src.__version__ import __version__
-from src.config import Config
+from src.config import Config, STATE_NAMES
+from src.email_grouper import EmailGrouper
 from src.email_sender import EmailSender, TokenRefreshError
 from src.logger import PipelineLogger
-from src.models import RunSummary, Subscriber
+from src.models import GroupedSubscriber, RunSummary, Subscriber
 from src.report_builder import ReportBuilder
 from src.sheet_reader import SheetReader
 from src.usgs_fetcher import USGSFetcher, USGSFetchError
@@ -59,7 +59,7 @@ class Pipeline:
                 end_time=end_time,
             )
 
-        # Step 2: Read subscribers
+        # Step 2: Read subscribers and group by email
         subscribers = self._read_subscribers()
         if subscribers is None:
             end_time = datetime.now(timezone.utc)
@@ -74,11 +74,22 @@ class Pipeline:
                 end_time=end_time,
             )
 
-        total_subscribers = len(subscribers)
+        # Group subscriber rows by email address
+        # Normalize empty state_code to the global default before grouping
+        for sub in subscribers:
+            if not sub.state_code:
+                sub.state_code = self._config.usgs_state_code
+
+        grouper = EmailGrouper()
+        grouped_subscribers = grouper.group_subscribers(subscribers)
+
+        total_subscribers = len(grouped_subscribers)
         self._logger.log("INFO", f"Processing {total_subscribers} subscribers")
 
         # Step 3: Determine unique states and fetch USGS data for each
-        state_gauge_data = self._fetch_gauge_data_for_subscribers(subscribers)
+        state_gauge_data = self._fetch_gauge_data_for_grouped_subscribers(
+            grouped_subscribers
+        )
         if state_gauge_data is None:
             end_time = datetime.now(timezone.utc)
             self._logger.output_summary(total_subscribers)
@@ -96,8 +107,8 @@ class Pipeline:
         email_sender = self._authenticate_email_sender()
         if email_sender is None:
             # Token auth failed — skip all subscribers
-            for sub in subscribers:
-                self._logger.record_skip(sub.email, "Email authentication failed")
+            for gs in grouped_subscribers:
+                self._logger.record_skip(gs.email, "Email authentication failed")
             end_time = datetime.now(timezone.utc)
             self._logger.output_summary(total_subscribers)
             return RunSummary(
@@ -112,29 +123,29 @@ class Pipeline:
 
         report_builder = ReportBuilder()
 
-        for subscriber in subscribers:
-            effective_state = (
-                subscriber.state_code
-                if subscriber.state_code
-                else self._config.usgs_state_code
+        for grouped_sub in grouped_subscribers:
+            report = report_builder.build_consolidated_report(
+                grouped_sub, state_gauge_data
             )
-            gauge_data = state_gauge_data.get(effective_state, {})
-
-            report = report_builder.build_report(subscriber, gauge_data)
 
             if report is None:
                 self._logger.record_skip(
-                    subscriber.email,
+                    grouped_sub.email,
                     "No matching gauges or no data available",
                 )
                 continue
 
-            success = email_sender.send_email(subscriber.email, report, state_code=effective_state)
+            # Determine subject line based on number of states
+            subject = self._determine_subject(grouped_sub)
+
+            success = email_sender.send_email(
+                grouped_sub.email, report, subject=subject
+            )
             if success:
-                self._logger.record_send_success(subscriber.email)
+                self._logger.record_send_success(grouped_sub.email)
             else:
                 self._logger.record_send_failure(
-                    subscriber.email, "Send failed after retries"
+                    grouped_sub.email, "Send failed after retries"
                 )
 
         # Step 5: Output summary
@@ -174,16 +185,37 @@ class Pipeline:
         self._logger.log("INFO", "Configuration validation passed")
         return True
 
-    def _fetch_gauge_data_for_subscribers(
-        self, subscribers: list[Subscriber]
-    ) -> dict[str, dict] | None:
-        """Fetch USGS gauge data for all unique states across subscribers.
+    def _determine_subject(self, grouped_sub: GroupedSubscriber) -> str:
+        """Determine the email subject line for a grouped subscriber.
 
-        Groups subscribers by their effective state (per-subscriber override
-        or global default), then fetches data once per unique state.
+        Uses the state-specific subject format for single-state subscribers,
+        and the consolidated subject for multi-state subscribers.
 
         Args:
-            subscribers: List of subscribers to determine required states.
+            grouped_sub: The grouped subscriber to determine subject for.
+
+        Returns:
+            The formatted subject line string.
+        """
+        if len(grouped_sub.state_preferences) == 1:
+            # Single-state: use state-specific subject
+            state_code = grouped_sub.state_preferences[0].state_code
+            state_name = STATE_NAMES.get(state_code, state_code)
+            return self._config.email_subject.format(state_name=state_name)
+        else:
+            # Multi-state: use consolidated subject
+            return self._config.consolidated_email_subject
+
+    def _fetch_gauge_data_for_grouped_subscribers(
+        self, grouped_subscribers: list[GroupedSubscriber]
+    ) -> dict[str, dict] | None:
+        """Fetch USGS gauge data for all unique states across grouped subscribers.
+
+        Collects all unique state codes from grouped subscriber preferences,
+        then fetches data once per unique state.
+
+        Args:
+            grouped_subscribers: List of grouped subscribers to determine required states.
 
         Returns:
             A dict mapping state_code -> {gauge_number -> GaugeEntry},
@@ -191,11 +223,9 @@ class Pipeline:
         """
         # Determine unique states needed
         unique_states: set[str] = set()
-        for sub in subscribers:
-            effective_state = (
-                sub.state_code if sub.state_code else self._config.usgs_state_code
-            )
-            unique_states.add(effective_state)
+        for gs in grouped_subscribers:
+            for pref in gs.state_preferences:
+                unique_states.add(pref.state_code)
 
         self._logger.log(
             "INFO",

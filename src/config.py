@@ -36,6 +36,7 @@ class Config:
     # Email
     sender_email: str = "fortunatopt@gmail.com"
     email_subject: str = "Current {state_name} River Levels"
+    consolidated_email_subject: str = "Current River Levels"
 
     # Scheduler
     schedule_time: str = "06:00"

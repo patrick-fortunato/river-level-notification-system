@@ -197,8 +197,22 @@ class ReportBuilder:
                 f"{gauge_link_html}\n"
                 f"    </div>"
             )
+        elif resolved.aw_flow_data is not None:
+            # AW flow data fallback (no USGS gauge, but AW provides flow info)
+            aw_data = resolved.aw_flow_data
+            details_html = (
+                f'      <div class="reach-details">'
+                f"<b>Flow:</b> {aw_data.reading} {aw_data.unit} | "
+                f"<b>Source:</b> {aw_data.gauge_name} (via AW)</div>"
+            )
+            return (
+                f'    <div class="reach-entry">\n'
+                f"{name_html}\n"
+                f"{details_html}\n"
+                f"    </div>"
+            )
         else:
-            # No gauge data available
+            # No gauge data available at all
             no_gauge_html = (
                 f'      <div class="no-gauge">No gauge data available</div>'
             )

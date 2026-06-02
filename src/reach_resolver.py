@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Protocol
 import requests
 
 from src.config import Config
-from src.models import ResolvedReach
+from src.models import AWFlowData, ResolvedReach
 
 if TYPE_CHECKING:
     from src.reach_cache import ReachCache
@@ -135,7 +135,7 @@ class ReachResolver:
         query = (
             "{ reach(id: %d) { river section altname states { shortkey } } "
             "getGaugeInformationForReachID(id: %d) "
-            "{ gauges { gauge { source source_id } } } }"
+            "{ gauges { gauge { source source_id name } gauge_reading reading updated metric { unit } } } }"
             % (reach_id, reach_id)
         )
 
@@ -196,11 +196,17 @@ class ReachResolver:
 
         gauge_id = self._extract_usgs_gauge(gauges)
 
+        # When no USGS gauge found, try to extract AW flow data as fallback
+        aw_flow_data = None
+        if gauge_id is None:
+            aw_flow_data = self._extract_aw_flow_data(gauges_list)
+
         return ResolvedReach(
             reach_id=reach_id,
             reach_name=reach_name,
             gauge_id=gauge_id,
             state=state,
+            aw_flow_data=aw_flow_data,
         )
 
     def _extract_reach_name(self, reach_data: dict) -> str:
@@ -245,6 +251,43 @@ class ReachResolver:
             source = gauge.get("source", "")
             if source.lower() == "usgs":
                 return gauge.get("source_id")
+        return None
+
+    def _extract_aw_flow_data(self, gauges_raw: list[dict]) -> AWFlowData | None:
+        """Extract AW flow data from the first gauge entry with a valid reading.
+
+        Iterates through the raw gauge entries and returns AWFlowData from the
+        first entry where gauge_reading or reading is not None.
+
+        Args:
+            gauges_raw: The raw gauges list from the API response (full entries,
+                        not just the gauge sub-objects).
+
+        Returns:
+            AWFlowData if a gauge with a valid reading is found, None otherwise.
+        """
+        for entry in gauges_raw:
+            gauge_reading = entry.get("gauge_reading")
+            reading = entry.get("reading")
+
+            if gauge_reading is not None or reading is not None:
+                reading_value = gauge_reading if gauge_reading is not None else reading
+
+                metric = entry.get("metric") or {}
+                unit = metric.get("unit") or "cfs"
+
+                gauge = entry.get("gauge") or {}
+                gauge_name = gauge.get("name") or ""
+
+                updated = entry.get("updated")
+
+                return AWFlowData(
+                    reading=float(reading_value),
+                    unit=unit,
+                    gauge_name=gauge_name,
+                    updated=updated,
+                )
+
         return None
 
 

@@ -5,6 +5,16 @@ from datetime import datetime
 
 
 @dataclass
+class AWFlowData:
+    """Flow data sourced from AW's gauge response (non-USGS fallback)."""
+
+    reading: float
+    unit: str
+    gauge_name: str
+    updated: float | None = None
+
+
+@dataclass
 class GaugeEntry:
     """A single river gauge reading from USGS."""
 
@@ -31,6 +41,7 @@ class ResolvedReach:
     reach_name: str
     gauge_id: str | None  # USGS gauge number, or None if no USGS gauge
     state: str | None = None  # US state abbreviation (e.g., "OR", "WA")
+    aw_flow_data: AWFlowData | None = None  # AW flow data fallback when no USGS gauge
 
     @property
     def aw_url(self) -> str:

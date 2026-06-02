@@ -528,3 +528,165 @@ def test_property_5_intra_group_subscriber_order_preserved(
             f"reach {reach_ids[i + 1]} (pos {positions[i + 1]}) in HTML, "
             f"violating intra-group subscriber order"
         )
+
+
+# --- Property 3 (aw-flow-fallback): Bug Condition — Report renders AW flow data ---
+
+from src.models import AWFlowData
+
+# Strategy for AW flow reading values
+aw_reading_strategy = st.floats(min_value=0.1, max_value=100000.0, allow_nan=False, allow_infinity=False)
+
+# Strategy for AW unit strings
+aw_unit_strategy = st.sampled_from(["cfs", "ft", "m3/s", "cms"])
+
+# Strategy for AW gauge name
+aw_gauge_name_strategy = st.text(
+    alphabet=st.characters(whitelist_categories=("L", "N", "Z"), blacklist_characters="<>&\"'\n\r\x00"),
+    min_size=1,
+    max_size=30,
+).map(str.strip).filter(lambda s: len(s) > 0)
+
+# Strategy for updated timestamps
+aw_updated_strategy = st.one_of(
+    st.none(),
+    st.floats(min_value=1.0, max_value=99999999.0, allow_nan=False, allow_infinity=False),
+)
+
+
+@settings(max_examples=100)
+@given(
+    reach_id=reach_id_strategy,
+    reach_name=reach_name_strategy,
+    reading=aw_reading_strategy,
+    unit=aw_unit_strategy,
+    gauge_name=aw_gauge_name_strategy,
+    updated=aw_updated_strategy,
+)
+def test_property_aw_flow_fallback_3_report_renders_aw_flow_data(
+    reach_id: int,
+    reach_name: str,
+    reading: float,
+    unit: str,
+    gauge_name: str,
+    updated,
+):
+    """Feature: aw-flow-fallback, Property 3: Bug Condition — Report renders AW flow data
+
+    For any resolved reach with aw_flow_data populated (non-None) and gauge_id=None,
+    the fixed ReportBuilder._render_reach_entry SHALL produce HTML that contains the
+    flow reading value and does NOT contain "No gauge data available".
+
+    **Validates: Requirements 2.3**
+    """
+    aw_flow_data = AWFlowData(
+        reading=reading,
+        unit=unit,
+        gauge_name=gauge_name,
+        updated=updated,
+    )
+
+    resolved = ResolvedReach(
+        reach_id=reach_id,
+        reach_name=reach_name,
+        gauge_id=None,
+        aw_flow_data=aw_flow_data,
+    )
+
+    builder = ReportBuilder()
+    html = builder._render_reach_entry(resolved, gauge_entry=None)
+
+    # Should contain the reading value
+    assert str(reading) in html, (
+        f"Expected reading '{reading}' in HTML output, got: {html}"
+    )
+
+    # Should contain the unit
+    assert unit in html, (
+        f"Expected unit '{unit}' in HTML output, got: {html}"
+    )
+
+    # Should NOT contain the empty-state message
+    assert "No gauge data available" not in html, (
+        f"HTML should not contain 'No gauge data available' when aw_flow_data is set"
+    )
+
+    # Should contain the gauge name (AW attribution)
+    assert gauge_name in html, (
+        f"Expected gauge_name '{gauge_name}' in HTML output for AW attribution"
+    )
+
+
+# --- Property 4 (aw-flow-fallback): Preservation — USGS report rendering unchanged ---
+
+
+@settings(max_examples=100)
+@given(
+    reach_id=reach_id_strategy,
+    reach_name=reach_name_strategy,
+    gauge_number=gauge_number_strategy,
+    flow_level=flow_level_strategy,
+    reading_datetime=reading_datetime_strategy,
+)
+def test_property_aw_flow_fallback_4_usgs_report_rendering_unchanged(
+    reach_id: int,
+    reach_name: str,
+    gauge_number: str,
+    flow_level: str,
+    reading_datetime: str,
+):
+    """Feature: aw-flow-fallback, Property 4: Preservation — USGS report rendering unchanged
+
+    For any resolved reach with a valid gauge_id and a corresponding GaugeEntry,
+    the fixed ReportBuilder._render_reach_entry SHALL produce HTML that contains
+    the flow level in cfs, a USGS gauge link, and does NOT reference AW attribution.
+
+    **Validates: Requirements 3.4**
+    """
+    resolved = ResolvedReach(
+        reach_id=reach_id,
+        reach_name=reach_name,
+        gauge_id=gauge_number,
+    )
+
+    gauge_entry = GaugeEntry(
+        gauge_number=gauge_number,
+        gauge_name=f"Gauge {gauge_number}",
+        usgs_page_url=f"https://waterdata.usgs.gov/monitoring-location/USGS-{gauge_number}/",
+        reading_datetime=reading_datetime,
+        flow_level=flow_level,
+    )
+
+    builder = ReportBuilder()
+    html = builder._render_reach_entry(resolved, gauge_entry)
+
+    # Should contain the flow level
+    assert flow_level in html, (
+        f"Expected flow level '{flow_level}' in USGS HTML output"
+    )
+
+    # Should contain "cfs" unit
+    assert "cfs" in html, (
+        "Expected 'cfs' in USGS HTML output"
+    )
+
+    # Should contain the USGS gauge link
+    expected_usgs_url = f"https://waterdata.usgs.gov/monitoring-location/USGS-{gauge_number}/"
+    assert expected_usgs_url in html, (
+        f"Expected USGS URL in HTML output"
+    )
+
+    # Should contain the gauge number reference
+    assert gauge_number in html, (
+        f"Expected gauge number '{gauge_number}' in HTML output"
+    )
+
+    # Should NOT contain "No gauge data available"
+    assert "No gauge data available" not in html, (
+        "USGS reach should not show 'No gauge data available'"
+    )
+
+    # Should NOT contain AW attribution markers
+    assert "(via AW)" not in html, (
+        "USGS reach should not contain AW attribution '(via AW)'"
+    )

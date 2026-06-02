@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.config import Config
-from src.models import ResolvedReach
+from src.models import AWFlowData, ResolvedReach
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +69,20 @@ class ReachCache:
             resolved: The resolved reach data to cache.
         """
         reaches = self._load_cache()
-        reaches[str(reach_id)] = {
+        entry = {
             "reach_name": resolved.reach_name,
             "gauge_id": resolved.gauge_id,
             "state": resolved.state,
             "cached_at": datetime.now(timezone.utc).isoformat(),
         }
+        if resolved.aw_flow_data is not None:
+            entry["aw_flow_data"] = {
+                "reading": resolved.aw_flow_data.reading,
+                "unit": resolved.aw_flow_data.unit,
+                "gauge_name": resolved.aw_flow_data.gauge_name,
+                "updated": resolved.aw_flow_data.updated,
+            }
+        reaches[str(reach_id)] = entry
         self._data = reaches
         self._write_cache(reaches)
 
@@ -199,9 +207,23 @@ class ReachCache:
 
         state = entry.get("state")
 
+        # Deserialize aw_flow_data if present
+        aw_flow_data = None
+        aw_flow_raw = entry.get("aw_flow_data")
+        if isinstance(aw_flow_raw, dict):
+            reading = aw_flow_raw.get("reading")
+            if reading is not None:
+                aw_flow_data = AWFlowData(
+                    reading=float(reading),
+                    unit=aw_flow_raw.get("unit") or "cfs",
+                    gauge_name=aw_flow_raw.get("gauge_name") or "",
+                    updated=aw_flow_raw.get("updated"),
+                )
+
         return ResolvedReach(
             reach_id=reach_id,
             reach_name=reach_name,
             gauge_id=gauge_id,
             state=state,
+            aw_flow_data=aw_flow_data,
         )

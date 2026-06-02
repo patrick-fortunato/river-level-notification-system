@@ -135,7 +135,7 @@ class ReachResolver:
         query = (
             "{ reach(id: %d) { river section altname states { shortkey } } "
             "getGaugeInformationForReachID(id: %d) "
-            "{ gauges { gauge { source source_id name } gauge_reading reading updated metric { unit } } } }"
+            "{ gauges { gauge { source source_id name } gauge_reading reading updated rmin rmax metric { unit } } } }"
             % (reach_id, reach_id)
         )
 
@@ -196,6 +196,18 @@ class ReachResolver:
 
         gauge_id = self._extract_usgs_gauge(gauges)
 
+        # Extract rmin/rmax from the first gauge entry
+        rmin = None
+        rmax = None
+        if gauges_list:
+            first_entry = gauges_list[0]
+            raw_rmin = first_entry.get("rmin")
+            raw_rmax = first_entry.get("rmax")
+            if raw_rmin is not None and isinstance(raw_rmin, (int, float)):
+                rmin = float(raw_rmin)
+            if raw_rmax is not None and isinstance(raw_rmax, (int, float)):
+                rmax = float(raw_rmax)
+
         # When no USGS gauge found, try to extract AW flow data as fallback
         aw_flow_data = None
         if gauge_id is None:
@@ -207,6 +219,8 @@ class ReachResolver:
             gauge_id=gauge_id,
             state=state,
             aw_flow_data=aw_flow_data,
+            rmin=rmin,
+            rmax=rmax,
         )
 
     def _extract_reach_name(self, reach_data: dict) -> str:

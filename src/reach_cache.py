@@ -20,15 +20,23 @@ class ReachCache:
 
     Cache file format:
     {
+        "version": 3,
         "reaches": {
             "1493": {
                 "reach_name": "Clackamas River - Three Lynx to North Fork Reservoir",
                 "gauge_id": "14209500",
+                "rmin": 1000.0,
+                "rmax": 9000.0,
                 "cached_at": "2025-01-15T08:00:00+00:00"
             }
         }
     }
+
+    Bump CACHE_VERSION when the cache entry schema changes to force a rebuild.
     """
+
+    # Increment this when the cache schema changes (new fields, format changes)
+    CACHE_VERSION = 3
 
     def __init__(self, config: Config) -> None:
         """Initialize the cache with application configuration.
@@ -73,6 +81,8 @@ class ReachCache:
             "reach_name": resolved.reach_name,
             "gauge_id": resolved.gauge_id,
             "state": resolved.state,
+            "rmin": resolved.rmin,
+            "rmax": resolved.rmax,
             "cached_at": datetime.now(timezone.utc).isoformat(),
         }
         if resolved.aw_flow_data is not None:
@@ -144,6 +154,19 @@ class ReachCache:
             self._data = {}
             return self._data
 
+        # Check cache version — if missing or mismatched, invalidate
+        cache_version = data.get("version")
+        if cache_version != self.CACHE_VERSION:
+            logger.info(
+                "Cache version mismatch (got %s, expected %d), rebuilding cache",
+                cache_version,
+                self.CACHE_VERSION,
+            )
+            self._data = {}
+            return self._data
+            self._data = {}
+            return self._data
+
         self._data = reaches
         return self._data
 
@@ -153,7 +176,7 @@ class ReachCache:
         Args:
             reaches: The reaches dictionary to persist.
         """
-        data = {"reaches": reaches}
+        data = {"version": self.CACHE_VERSION, "reaches": reaches}
         try:
             with open(self._cache_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
@@ -220,10 +243,18 @@ class ReachCache:
                     updated=aw_flow_raw.get("updated"),
                 )
 
+        # Deserialize rmin/rmax with None defaults for missing keys
+        rmin = entry.get("rmin")
+        rmax = entry.get("rmax")
+        rmin = float(rmin) if rmin is not None else None
+        rmax = float(rmax) if rmax is not None else None
+
         return ResolvedReach(
             reach_id=reach_id,
             reach_name=reach_name,
             gauge_id=gauge_id,
             state=state,
             aw_flow_data=aw_flow_data,
+            rmin=rmin,
+            rmax=rmax,
         )

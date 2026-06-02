@@ -326,3 +326,201 @@ def test_property_1_resolver_extracts_state_from_api_response(
         f"for API state value={state_value!r}"
     )
     assert result.reach_id == reach_id
+
+
+# --- Property 1 (aw-flow-fallback): Bug Condition — AW flow data captured as fallback ---
+
+
+# Strategy for gauge reading values (positive floats)
+reading_value_strategy = st.floats(min_value=0.1, max_value=100000.0, allow_nan=False, allow_infinity=False)
+
+# Strategy for unit strings
+unit_strategy = st.sampled_from(["cfs", "ft", "m3/s", "cms"])
+
+# Strategy for gauge name
+gauge_name_strategy = st.text(
+    alphabet=st.characters(whitelist_categories=("L", "N", "Z"), blacklist_characters="\n\r\x00"),
+    min_size=1,
+    max_size=30,
+).map(str.strip).filter(lambda s: len(s) > 0)
+
+# Strategy for non-USGS source names
+non_usgs_source_strategy = st.sampled_from(["virtual", "calculated", "other", "estimated"])
+
+# Strategy for updated timestamps (positive floats or None)
+updated_strategy = st.one_of(st.none(), st.floats(min_value=1.0, max_value=99999999.0, allow_nan=False, allow_infinity=False))
+
+
+@settings(max_examples=100)
+@given(
+    reach_id=st.integers(min_value=1, max_value=99999),
+    river=name_text_strategy,
+    section=name_text_strategy,
+    gauge_source=non_usgs_source_strategy,
+    gauge_source_id=source_id_strategy,
+    gauge_name=gauge_name_strategy,
+    gauge_reading=reading_value_strategy,
+    unit=unit_strategy,
+    updated=updated_strategy,
+)
+def test_property_aw_flow_fallback_1_aw_flow_data_captured(
+    reach_id: int,
+    river: str,
+    section: str,
+    gauge_source: str,
+    gauge_source_id: str,
+    gauge_name: str,
+    gauge_reading: float,
+    unit: str,
+    updated,
+):
+    """Feature: aw-flow-fallback, Property 1: Bug Condition — AW flow data captured as fallback
+
+    For any AW API response where no gauge has source="usgs" but at least one
+    gauge has a valid reading (gauge_reading is not null), the fixed _query_reach
+    function SHALL produce a ResolvedReach with aw_flow_data populated containing
+    the first gauge's reading value, unit, gauge name, and updated timestamp.
+
+    **Validates: Requirements 2.1, 2.2**
+    """
+    resolver = _make_resolver()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "data": {
+            "reach": {
+                "river": river,
+                "section": section,
+                "altname": None,
+                "states": [{"shortkey": "OR"}],
+            },
+            "getGaugeInformationForReachID": {
+                "gauges": [
+                    {
+                        "gauge": {"source": gauge_source, "source_id": gauge_source_id, "name": gauge_name},
+                        "gauge_reading": gauge_reading,
+                        "reading": gauge_reading,
+                        "updated": updated,
+                        "metric": {"unit": unit},
+                    }
+                ]
+            },
+        }
+    }
+
+    resolver._http_client.post.return_value = mock_response
+
+    result = resolver._query_reach(reach_id)
+
+    # No USGS gauge → gauge_id should be None
+    assert result.gauge_id is None, (
+        f"Expected gauge_id=None for non-USGS gauge, got {result.gauge_id}"
+    )
+
+    # AW flow data should be populated
+    assert result.aw_flow_data is not None, (
+        "Expected aw_flow_data to be populated when non-USGS gauge has valid reading"
+    )
+    assert result.aw_flow_data.reading == gauge_reading, (
+        f"Expected reading={gauge_reading}, got {result.aw_flow_data.reading}"
+    )
+    assert result.aw_flow_data.unit == unit, (
+        f"Expected unit='{unit}', got '{result.aw_flow_data.unit}'"
+    )
+    assert result.aw_flow_data.gauge_name == gauge_name, (
+        f"Expected gauge_name='{gauge_name}', got '{result.aw_flow_data.gauge_name}'"
+    )
+    assert result.aw_flow_data.updated == updated, (
+        f"Expected updated={updated}, got {result.aw_flow_data.updated}"
+    )
+
+
+# --- Property 2 (aw-flow-fallback): Preservation — USGS gauge selection unchanged ---
+
+
+@settings(max_examples=100)
+@given(
+    reach_id=st.integers(min_value=1, max_value=99999),
+    river=name_text_strategy,
+    section=name_text_strategy,
+    usgs_source_id=source_id_strategy,
+    extra_gauges=st.lists(
+        st.fixed_dictionaries({
+            "source": non_usgs_source_strategy,
+            "source_id": source_id_strategy,
+            "name": gauge_name_strategy,
+        }),
+        min_size=0,
+        max_size=3,
+    ),
+    gauge_reading=reading_value_strategy,
+    unit=unit_strategy,
+)
+def test_property_aw_flow_fallback_2_usgs_gauge_selection_preserved(
+    reach_id: int,
+    river: str,
+    section: str,
+    usgs_source_id: str,
+    extra_gauges: list[dict],
+    gauge_reading: float,
+    unit: str,
+):
+    """Feature: aw-flow-fallback, Property 2: Preservation — USGS gauge selection unchanged
+
+    For any AW API response where at least one gauge has source="usgs", the
+    fixed _query_reach function SHALL produce a ResolvedReach with gauge_id
+    set to the first USGS gauge's source_id and aw_flow_data set to None.
+
+    **Validates: Requirements 3.1, 3.2**
+    """
+    resolver = _make_resolver()
+
+    # Build gauges list: USGS gauge first, then extra non-USGS gauges
+    gauges_list = [
+        {
+            "gauge": {"source": "usgs", "source_id": usgs_source_id, "name": "USGS Gauge"},
+            "gauge_reading": gauge_reading,
+            "reading": gauge_reading,
+            "updated": 12345.0,
+            "metric": {"unit": unit},
+        }
+    ]
+    for g in extra_gauges:
+        gauges_list.append({
+            "gauge": {"source": g["source"], "source_id": g["source_id"], "name": g["name"]},
+            "gauge_reading": gauge_reading,
+            "reading": gauge_reading,
+            "updated": 12345.0,
+            "metric": {"unit": unit},
+        })
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "data": {
+            "reach": {
+                "river": river,
+                "section": section,
+                "altname": None,
+                "states": [{"shortkey": "WA"}],
+            },
+            "getGaugeInformationForReachID": {
+                "gauges": gauges_list
+            },
+        }
+    }
+
+    resolver._http_client.post.return_value = mock_response
+
+    result = resolver._query_reach(reach_id)
+
+    # USGS gauge should be selected
+    assert result.gauge_id == usgs_source_id, (
+        f"Expected gauge_id='{usgs_source_id}', got '{result.gauge_id}'"
+    )
+
+    # AW flow data should NOT be populated when USGS gauge is present
+    assert result.aw_flow_data is None, (
+        f"Expected aw_flow_data=None when USGS gauge is present, got {result.aw_flow_data}"
+    )

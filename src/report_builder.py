@@ -12,7 +12,13 @@ from datetime import datetime
 
 from src.__version__ import __version__
 from src.config import STATE_NAMES
-from src.models import GaugeEntry, ReachSubscriber, ResolvedReach
+from src.models import (
+    GaugeEntry,
+    ReachSubscriber,
+    ResolvedReach,
+    RunnabilityStatus,
+    classify_runnability,
+)
 
 
 def _format_reading_datetime(raw_datetime: str) -> str:
@@ -175,11 +181,25 @@ class ReportBuilder:
             formatted_datetime = _format_reading_datetime(
                 gauge_entry.reading_datetime
             )
+
+            # Determine runnability indicator for USGS reaches
+            try:
+                flow_value = float(gauge_entry.flow_level)
+            except (ValueError, TypeError):
+                flow_value = None
+            status = classify_runnability(flow_value, resolved.rmin, resolved.rmax)
+            indicator_html = self._render_runnability_indicator(status)
+
             details_html = (
                 f'      <div class="reach-details">'
                 f"<b>Flow:</b> {gauge_entry.flow_level} cfs | "
                 f"<b>Reading:</b> {formatted_datetime}</div>"
             )
+
+            # Runnability indicator on its own line
+            indicator_line = ""
+            if indicator_html:
+                indicator_line = f"\n      <div>{indicator_html}</div>"
 
             # USGS gauge link
             gauge_link_html = ""
@@ -194,21 +214,34 @@ class ReportBuilder:
                 f'    <div class="reach-entry">\n'
                 f"{name_html}\n"
                 f"{details_html}"
+                f"{indicator_line}"
                 f"{gauge_link_html}\n"
                 f"    </div>"
             )
         elif resolved.aw_flow_data is not None:
             # AW flow data fallback (no USGS gauge, but AW provides flow info)
             aw_data = resolved.aw_flow_data
+
+            # Determine runnability indicator for AW fallback reaches
+            status = classify_runnability(aw_data.reading, resolved.rmin, resolved.rmax)
+            indicator_html = self._render_runnability_indicator(status)
+
             details_html = (
                 f'      <div class="reach-details">'
                 f"<b>Flow:</b> {aw_data.reading} {aw_data.unit} | "
                 f"<b>Source:</b> {aw_data.gauge_name} (via AW)</div>"
             )
+
+            # Runnability indicator on its own line
+            indicator_line = ""
+            if indicator_html:
+                indicator_line = f"\n      <div>{indicator_html}</div>"
+
             return (
                 f'    <div class="reach-entry">\n'
                 f"{name_html}\n"
-                f"{details_html}\n"
+                f"{details_html}"
+                f"{indicator_line}\n"
                 f"    </div>"
             )
         else:
@@ -237,3 +270,17 @@ class ReportBuilder:
             f"      River Level Notification System v{version}\n"
             f"    </div>"
         )
+
+    def _render_runnability_indicator(self, status: RunnabilityStatus) -> str:
+        """Render a runnability indicator HTML span with inline CSS.
+
+        Args:
+            status: The runnability classification status.
+
+        Returns:
+            HTML span string for the indicator, or empty string if UNKNOWN.
+        """
+        if status == RunnabilityStatus.UNKNOWN:
+            return ""
+        color = "#2e7d32" if status == RunnabilityStatus.RUNNABLE else "#c62828"
+        return f'<span style="color: {color}; font-weight: bold;"> ● {status.value}</span>'

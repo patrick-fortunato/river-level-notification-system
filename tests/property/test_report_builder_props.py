@@ -690,3 +690,149 @@ def test_property_aw_flow_fallback_4_usgs_report_rendering_unchanged(
     assert "(via AW)" not in html, (
         "USGS reach should not contain AW attribution '(via AW)'"
     )
+
+
+# --- Property 4 (runnability-indicator): Rendered indicator matches runnability status ---
+
+
+@settings(max_examples=100)
+@given(
+    reach_id=reach_id_strategy,
+    reach_name=reach_name_strategy,
+    gauge_number=gauge_number_strategy,
+    flow=st.floats(min_value=0, max_value=100000, allow_nan=False, allow_infinity=False),
+    rmin=st.floats(min_value=0, max_value=50000, allow_nan=False, allow_infinity=False),
+    range_width=st.floats(min_value=0.1, max_value=50000, allow_nan=False, allow_infinity=False),
+    reading_datetime=reading_datetime_strategy,
+)
+def test_property_4_rendered_indicator_matches_runnability_status(
+    reach_id: int,
+    reach_name: str,
+    gauge_number: str,
+    flow: float,
+    rmin: float,
+    range_width: float,
+    reading_datetime: str,
+):
+    """Feature: runnability-indicator, Property 4: Rendered indicator matches status
+
+    For any reach with flow data and non-null rmin/rmax, the rendered HTML SHALL
+    contain the correct colored indicator text corresponding to the comparison of
+    the flow reading against the range (green "Runnable" when in range, red
+    "Too Low" when below, red "Too High" when above).
+
+    **Validates: Requirements 4.1, 4.2, 4.3, 5.1, 5.2**
+    """
+    from src.models import classify_runnability, RunnabilityStatus
+
+    rmax = rmin + range_width  # ensures rmin <= rmax
+    flow_str = str(int(flow)) if flow == int(flow) else f"{flow:.1f}"
+
+    resolved = ResolvedReach(
+        reach_id=reach_id,
+        reach_name=reach_name,
+        gauge_id=gauge_number,
+        rmin=rmin,
+        rmax=rmax,
+    )
+
+    gauge_entry = GaugeEntry(
+        gauge_number=gauge_number,
+        gauge_name=f"Gauge {gauge_number}",
+        usgs_page_url=f"https://waterdata.usgs.gov/monitoring-location/USGS-{gauge_number}/",
+        reading_datetime=reading_datetime,
+        flow_level=str(flow),
+    )
+
+    builder = ReportBuilder()
+    html = builder._render_reach_entry(resolved, gauge_entry)
+
+    # Determine expected status
+    status = classify_runnability(flow, rmin, rmax)
+
+    if status == RunnabilityStatus.RUNNABLE:
+        assert 'color: #2e7d32' in html, (
+            f"Expected green color for RUNNABLE status, not found in HTML"
+        )
+        assert '● Runnable' in html, (
+            f"Expected '● Runnable' text in HTML"
+        )
+    elif status == RunnabilityStatus.TOO_LOW:
+        assert 'color: #c62828' in html, (
+            f"Expected red color for TOO_LOW status, not found in HTML"
+        )
+        assert '● Too Low' in html, (
+            f"Expected '● Too Low' text in HTML"
+        )
+    elif status == RunnabilityStatus.TOO_HIGH:
+        assert 'color: #c62828' in html, (
+            f"Expected red color for TOO_HIGH status, not found in HTML"
+        )
+        assert '● Too High' in html, (
+            f"Expected '● Too High' text in HTML"
+        )
+
+
+# --- Property 5 (runnability-indicator): Unknown status renders no indicator ---
+
+
+@settings(max_examples=100)
+@given(
+    reach_id=reach_id_strategy,
+    reach_name=reach_name_strategy,
+    gauge_number=gauge_number_strategy,
+    flow_level=flow_level_strategy,
+    reading_datetime=reading_datetime_strategy,
+    rmin=st.one_of(st.none(), st.floats(min_value=0, max_value=50000, allow_nan=False, allow_infinity=False)),
+    rmax=st.one_of(st.none(), st.floats(min_value=0, max_value=100000, allow_nan=False, allow_infinity=False)),
+)
+def test_property_5_unknown_status_renders_no_indicator(
+    reach_id: int,
+    reach_name: str,
+    gauge_number: str,
+    flow_level: str,
+    reading_datetime: str,
+    rmin: float | None,
+    rmax: float | None,
+):
+    """Feature: runnability-indicator, Property 5: Unknown status renders no indicator
+
+    For any reach where rmin or rmax is None (regardless of whether flow data is
+    available), the rendered HTML SHALL NOT contain any runnability indicator text
+    ("Runnable", "Too Low", or "Too High").
+
+    **Validates: Requirements 4.4, 4.6**
+    """
+    from hypothesis import assume
+    # At least one of rmin/rmax must be None for this property
+    assume(rmin is None or rmax is None)
+
+    resolved = ResolvedReach(
+        reach_id=reach_id,
+        reach_name=reach_name,
+        gauge_id=gauge_number,
+        rmin=rmin,
+        rmax=rmax,
+    )
+
+    gauge_entry = GaugeEntry(
+        gauge_number=gauge_number,
+        gauge_name=f"Gauge {gauge_number}",
+        usgs_page_url=f"https://waterdata.usgs.gov/monitoring-location/USGS-{gauge_number}/",
+        reading_datetime=reading_datetime,
+        flow_level=flow_level,
+    )
+
+    builder = ReportBuilder()
+    html = builder._render_reach_entry(resolved, gauge_entry)
+
+    # No indicator text should appear
+    assert "● Runnable" not in html, (
+        f"'● Runnable' should not appear when rmin={rmin!r} or rmax={rmax!r} is None"
+    )
+    assert "● Too Low" not in html, (
+        f"'● Too Low' should not appear when rmin={rmin!r} or rmax={rmax!r} is None"
+    )
+    assert "● Too High" not in html, (
+        f"'● Too High' should not appear when rmin={rmin!r} or rmax={rmax!r} is None"
+    )

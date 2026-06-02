@@ -90,8 +90,9 @@ class TestReachCacheWriteAndReadCycle:
         with tempfile.TemporaryDirectory() as tmp_dir:
             cache_file = str(Path(tmp_dir) / "aw_reach_cache.json")
 
-            # Write a cache file with an old timestamp (expired)
+            # Write a cache file with an old timestamp (expired) but correct version
             cache_data = {
+                "version": ReachCache.CACHE_VERSION,
                 "reaches": {
                     "1234": {
                         "reach_name": "Old Cached Reach",

@@ -80,11 +80,11 @@ class TestLegacyCacheEntryWithoutState:
     """6.3: Legacy cache entry without state key loads with state=None."""
 
     def test_legacy_entry_loads_with_state_none(self):
-        """A cache entry missing the 'state' key loads with state=None."""
+        """A cache file without version key is treated as empty (cache miss)."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             cache_file = Path(tmp_dir) / "test_cache.json"
 
-            # Write a legacy cache entry (no "state" key)
+            # Write a legacy cache entry (no version key)
             legacy_data = {
                 "reaches": {
                     "1234": {
@@ -103,12 +103,9 @@ class TestLegacyCacheEntryWithoutState:
             )
             cache = ReachCache(config)
 
+            # Unversioned cache is rejected — returns None (forces rebuild)
             result = cache.get_reach(1234)
-
-            assert result is not None
-            assert result.state is None
-            assert result.reach_name == "Clackamas River - Three Lynx"
-            assert result.gauge_id == "14209500"
+            assert result is None
 
 
 class TestReportSingleStateOneHeading:

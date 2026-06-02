@@ -147,3 +147,61 @@ def test_property_2_cache_round_trip_preserves_state(resolved: ResolvedReach):
         assert result.reach_id == resolved.reach_id
         assert result.reach_name == resolved.reach_name
         assert result.gauge_id == resolved.gauge_id
+
+
+# --- Property 1 (runnability-indicator): Cache round-trip preserves rmin/rmax ---
+
+# Strategy for rmin/rmax values (float or None)
+rmin_rmax_strategy = st.one_of(
+    st.none(),
+    st.floats(min_value=0, max_value=100000, allow_nan=False, allow_infinity=False),
+)
+
+# Strategy for generating a ResolvedReach with rmin/rmax
+resolved_reach_with_rmin_rmax_strategy = st.builds(
+    ResolvedReach,
+    reach_id=reach_ids,
+    reach_name=reach_names,
+    gauge_id=gauge_ids,
+    state=state_strategy,
+    rmin=rmin_rmax_strategy,
+    rmax=rmin_rmax_strategy,
+)
+
+
+@settings(max_examples=100)
+@given(resolved=resolved_reach_with_rmin_rmax_strategy)
+def test_property_1_cache_round_trip_preserves_rmin_rmax(resolved: ResolvedReach):
+    """Feature: runnability-indicator, Property 1: Cache round-trip preserves rmin/rmax
+
+    For any valid ResolvedReach with any combination of rmin and rmax values
+    (including None), writing it to the cache via put_reach and reading it back
+    via get_reach SHALL produce a ResolvedReach with the same rmin and rmax values.
+
+    **Validates: Requirements 2.1, 2.2, 2.3**
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        cache_file = Path(tmp_dir) / "test_cache.json"
+
+        config = Config(
+            aw_reach_cache_file=str(cache_file),
+            aw_cache_ttl_seconds=604800,
+        )
+        cache = ReachCache(config)
+
+        # Write the resolved reach to cache
+        cache.put_reach(resolved.reach_id, resolved)
+
+        # Read it back
+        result = cache.get_reach(resolved.reach_id)
+
+        # The round-trip must preserve rmin and rmax
+        assert result is not None, (
+            f"get_reach returned None for reach_id={resolved.reach_id}"
+        )
+        assert result.rmin == resolved.rmin, (
+            f"rmin mismatch: expected {resolved.rmin!r}, got {result.rmin!r}"
+        )
+        assert result.rmax == resolved.rmax, (
+            f"rmax mismatch: expected {resolved.rmax!r}, got {result.rmax!r}"
+        )

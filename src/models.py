@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 
 
 @dataclass
@@ -42,6 +43,8 @@ class ResolvedReach:
     gauge_id: str | None  # USGS gauge number, or None if no USGS gauge
     state: str | None = None  # US state abbreviation (e.g., "OR", "WA")
     aw_flow_data: AWFlowData | None = None  # AW flow data fallback when no USGS gauge
+    rmin: float | None = None  # Minimum runnable flow
+    rmax: float | None = None  # Maximum runnable flow
 
     @property
     def aw_url(self) -> str:
@@ -70,3 +73,33 @@ class RunSummary:
     skip_reasons: list[str]
     start_time: datetime
     end_time: datetime
+
+
+class RunnabilityStatus(str, Enum):
+    """Runnability classification based on flow vs runnable range."""
+
+    RUNNABLE = "Runnable"
+    TOO_LOW = "Too Low"
+    TOO_HIGH = "Too High"
+    UNKNOWN = "Unknown"
+
+
+def classify_runnability(
+    flow: float | None,
+    rmin: float | None,
+    rmax: float | None,
+) -> RunnabilityStatus:
+    """Classify flow against runnable range.
+
+    Returns UNKNOWN if any input is None.
+    Returns RUNNABLE if rmin <= flow <= rmax.
+    Returns TOO_LOW if flow < rmin.
+    Returns TOO_HIGH if flow > rmax.
+    """
+    if flow is None or rmin is None or rmax is None:
+        return RunnabilityStatus.UNKNOWN
+    if flow < rmin:
+        return RunnabilityStatus.TOO_LOW
+    if flow > rmax:
+        return RunnabilityStatus.TOO_HIGH
+    return RunnabilityStatus.RUNNABLE

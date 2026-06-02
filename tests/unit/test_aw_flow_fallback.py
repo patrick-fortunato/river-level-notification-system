@@ -199,15 +199,14 @@ def test_reach_cache_round_trip_with_aw_flow_data():
 
 
 def test_reach_cache_backward_compatibility_no_aw_flow_data_key():
-    """Test ReachCache backward compatibility: get reach from cache entry
-    without aw_flow_data key."""
+    """Test ReachCache backward compatibility: cache without version key is
+    treated as empty (forces rebuild from API)."""
     from datetime import datetime, timezone
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         cache_file = Path(tmp_dir) / "test_cache.json"
 
-        # Manually write a cache entry without the aw_flow_data key
-        # (simulating an old cache format) — use current time so TTL is valid
+        # Manually write a cache entry without version key (old format)
         now_iso = datetime.now(timezone.utc).isoformat()
         cache_data = {
             "reaches": {
@@ -228,14 +227,9 @@ def test_reach_cache_backward_compatibility_no_aw_flow_data_key():
         )
         cache = ReachCache(config)
 
+        # Unversioned cache is treated as empty — forces API re-fetch
         result = cache.get_reach(1493)
-
-        assert result is not None
-        assert result.reach_id == 1493
-        assert result.reach_name == "Clackamas River - Three Lynx to North Fork Reservoir"
-        assert result.gauge_id == "14209500"
-        assert result.state == "OR"
-        assert result.aw_flow_data is None
+        assert result is None
 
 
 # --- 6.6: _render_reach_entry with aw_flow_data present, gauge_entry None ---

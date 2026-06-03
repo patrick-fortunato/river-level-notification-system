@@ -49,15 +49,20 @@ python src/create_token.py
 ### Run
 
 ```bash
-# Run once immediately
+# Run as system tray app (no console window)
+pythonw river_notify_tray.pyw
+
+# Or run once immediately from command line
 python river_notify.py --run-now
 
-# Start the daily scheduler
+# Start the legacy blocking scheduler
 python river_notify.py
 
 # Check version
 python river_notify.py --version
 ```
+
+The tray app sits in your Windows notification area. Right-click for: **Run Now**, **Start/Stop Scheduler**, **Quit**. Green icon = running, gray = stopped.
 
 ## Google Sheet Structure
 
@@ -90,7 +95,8 @@ Key settings in `src/config.py`:
 ## Project Structure
 
 ```
-├── river_notify.py          # Main entry point
+├── river_notify.py          # CLI entry point (--run-now, --version, blocking scheduler)
+├── river_notify_tray.pyw    # System tray entry point (no console window)
 ├── src/
 │   ├── __init__.py
 │   ├── __version__.py       # Semantic version (1.0.0)
@@ -103,11 +109,13 @@ Key settings in `src/config.py`:
 │   ├── report_builder.py    # HTML email report builder (reach-first layout)
 │   ├── email_sender.py      # Gmail API sender
 │   ├── pipeline.py          # Pipeline orchestrator
+│   ├── scheduler.py         # Scheduler class + legacy start_scheduler()
+│   ├── scheduler_thread.py  # Background scheduler thread for tray app
+│   ├── tray_app.py          # System tray application (pystray)
 │   ├── retry.py             # Retry with exponential backoff
 │   ├── validator.py         # Startup configuration validator
 │   ├── logger.py            # Structured logging
 │   ├── aw_client.py         # American Whitewater API client
-│   ├── scheduler.py         # Daily scheduler
 │   └── create_token.py      # One-time OAuth token generator
 ├── tests/
 │   ├── property/            # Property-based tests (Hypothesis)

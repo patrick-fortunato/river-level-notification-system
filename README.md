@@ -115,7 +115,9 @@ Key settings in `src/config.py`:
 │   └── integration/         # Integration tests (mocked services)
 ├── requirements.txt
 ├── pyproject.toml
-└── .gitignore
+├── .gitignore
+└── android/                 # Native Android companion app (Kotlin, planned)
+    └── app/
 ```
 
 ## Commit Message Conventions
@@ -132,6 +134,18 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/) f
 - All three are listed in `.gitignore`
 - Credentials are loaded from external files at runtime
 - `aw_reach_cache.json` is auto-generated and contains no secrets (listed in `.gitignore`)
+
+## Android App (Planned)
+
+A native Android companion app is in development under the `android/` directory. It provides the same river flow and runnability data directly on your phone — no email required.
+
+- **Home screen widget** — shows river names + runnability status at a glance
+- **Browse & add reaches** — browse AW reaches by state, search by name
+- **Daily notifications** — lists runnable rivers after each scheduled fetch
+- **Offline support** — cached data available without network
+- **WorkManager scheduling** — battery-efficient daily updates at a user-chosen time
+
+The Android app is a standalone Kotlin implementation sharing the same business logic (AW API queries, runnability classification) but running independently from the Windows/Python app.
 
 ## Who This Is For
 
